@@ -18,8 +18,10 @@ dealbreakers:
   min_total_sqft: 0
   # Acceptable furnishing states (valid options: "furnished", "part furnished", "unfurnished", "unknown").
   required_furnishing:
+    - "furnished or unfurnished, landlord is flexible"
     - "furnished"
     - "part furnished"
+    - "part-furnished
     - "unfurnished"
     - "unknown"
   # Maximum floor level before a lift is strictly required.
