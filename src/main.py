@@ -5,10 +5,10 @@ import yaml
 
 from core.db import check_and_log_property  # (The Firestore logic we discussed earlier)
 from evaluators.scoring import calculate_match_score, passes_dealbreakers
-from evaluators.vision import evaluate_property_images, extract_square_footage
+from evaluators.vision import evaluate_property_images, extract_floorplan_details
 from scrapers.listing import extract_rightmove_data_via_api
 from scrapers.search import fetch_search_results
-from services.maps import get_commute_times
+from services.maps import get_commute_times, check_noise_pollution
 from services.telegram import send_telegram_alert
 
 logging.basicConfig(
@@ -41,9 +41,6 @@ def run_pipeline():
 
             # 2. Hard Filters (Zero/Low Cost)
             if not passes_dealbreakers(property_data, config):
-                logging.info(
-                    f"Property {property_data['id']} failed dealbreakers. Skipping."
-                )
                 continue
 
             # 3. Check State (Firestore Idempotency)
@@ -51,17 +48,18 @@ def run_pipeline():
             if not check_and_log_property(property_data["id"]):
                 continue
 
-            # 4. Extract SqFt via Gemini (Fast Path)
-            property_data["sqft"] = extract_square_footage(
-                property_data.get("floorplans", [])
+            # 4. Extract Floorplan Details via Gemini (Fast Path)
+            floorplan_details = extract_floorplan_details(
+                property_data.get("floorplans", []),
+                property_data.get("description", "")
             )
-
-            # 4.5 Check sqft specific dealbreaker
-            if property_data.get("sqft", 0) > 0 and property_data["sqft"] < config["dealbreakers"].get("min_total_sqft", 0):
-                logging.info(
-                    f"Property {property_data['id']} failed sqft dealbreaker. Skipping."
-                )
-                continue
+            property_data["sqft"] = floorplan_details.total_sqft
+            property_data["reception_length_m"] = floorplan_details.reception_length_m
+            property_data["reception_on_ground_floor"] = floorplan_details.reception_on_ground_floor
+            property_data["max_ceiling_height_m"] = floorplan_details.max_ceiling_height_m
+            property_data["floor_level"] = floorplan_details.floor_level
+            property_data["has_lift"] = floorplan_details.has_lift
+            property_data["master_bedroom_length_m"] = floorplan_details.master_bedroom_length_m
 
             # ...
             # 5. Heavy Evaluation
@@ -80,16 +78,28 @@ def run_pipeline():
             )
 
             # 6. Final Scoring (Pass the commute metrics in)
-            final_score = calculate_match_score(
+            property_data["is_noisy_location"] = check_noise_pollution(
+                property_data.get("latitude"), property_data.get("longitude")
+            )
+
+            final_score, breakdown = calculate_match_score(
                 property_data, visual_metrics, commute_metrics, config
             )
 
             # 7. Rich Media Dispatch
             if final_score >= config.get("alert_threshold", 70):
                 logging.info(f"Property {property_data['id']} scored {final_score}! Dispatching Telegram alert.")
-                send_telegram_alert(telegram_token, telegram_chat_id, property_data, final_score)
+                send_telegram_alert(telegram_token, telegram_chat_id, property_data, final_score, breakdown)
             else:
-                logging.info(f"Property {property_data['id']} scored {final_score}, below threshold.")
+                cons = " | ".join(breakdown.get("cons", [])) or "None"
+                pros = " | ".join(breakdown.get("pros", [])) or "None"
+                scorecard = breakdown.get("scorecard", {})
+                score_str = " | ".join(f"{k}: {v}" for k, v in scorecard.items())
+                logging.info(
+                    f"Property {property_data['id']} scored {final_score:.1f}, below threshold.\n"
+                    f"  Scorecard: {score_str}\n"
+                    f"  Pros: [{pros}] | Cons: [{cons}]"
+                )
 
 
 if __name__ == "__main__":

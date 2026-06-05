@@ -1,8 +1,11 @@
 import requests
 import logging
 
-def send_telegram_alert(bot_token: str, chat_id: str, property_data: dict, score: float):
+def send_telegram_alert(bot_token: str, chat_id: str, property_data: dict, score: float, breakdown: dict):
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+    
+    pros_text = "\n".join([f"✅ {p}" for p in breakdown.get("pros", [])])
+    cons_text = "\n".join([f"⚠️ {c}" for c in breakdown.get("cons", [])])
     
     caption = (
         f"🚨 **High Match Property ({score}/100)** 🚨\n\n"
@@ -10,8 +13,14 @@ def send_telegram_alert(bot_token: str, chat_id: str, property_data: dict, score
         f"💷 £{property_data['price_pcm']} pcm\n"
         f"🛏️ {property_data['bedrooms']} Bed | 📏 {property_data.get('sqft', 'Unknown')} sqft\n"
         f"🏡 Type: {property_data['property_type']}\n\n"
-        f"🔗 [View on Rightmove]({property_data['url']})"
     )
+    
+    if pros_text:
+        caption += f"**Pros:**\n{pros_text}\n\n"
+    if cons_text:
+        caption += f"**Cons:**\n{cons_text}\n\n"
+        
+    caption += f"🔗 [View on Rightmove]({property_data['url']})"
     
     payload = {
         "chat_id": chat_id,

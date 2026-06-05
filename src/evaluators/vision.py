@@ -34,6 +34,39 @@ class PropertyVisuals(BaseModel):
     aesthetic_verdict: str = Field(
         description="A brief 1-sentence summary of the property's style and condition."
     )
+    has_virtual_staging: bool = Field(
+        description="True if any images appear to use virtual staging (computer-generated furniture)."
+    )
+    has_wide_angle_distortion: bool = Field(
+        description="True if images exhibit severe wide-angle lens distortion to make rooms look larger."
+    )
+    epc_rating: str = Field(
+        description="The Energy Performance Certificate (EPC) rating letter (A-G), if an EPC graph is found. Return 'Unknown' if not found."
+    )
+
+
+class FloorplanDetails(BaseModel):
+    total_sqft: int = Field(
+        description="Total Gross Internal Area in square feet. 0 if not found."
+    )
+    reception_length_m: float = Field(
+        description="The longest dimension of the largest reception room/living room in meters. Convert from feet/inches if necessary. 0.0 if not found."
+    )
+    reception_on_ground_floor: bool = Field(
+        description="True if the main reception room is on the ground floor."
+    )
+    max_ceiling_height_m: float = Field(
+        description="The maximum ceiling height indicated anywhere on the plan in meters. 0.0 if not found."
+    )
+    floor_level: int = Field(
+        description="The floor the main entrance of the flat is on. Ground floor = 0, First = 1, etc. If it's a house or unknown, return 0."
+    )
+    has_lift: bool = Field(
+        description="True if the description mentions a lift or elevator."
+    )
+    master_bedroom_length_m: float = Field(
+        description="The longest dimension of the largest bedroom in meters. 0.0 if not found."
+    )
 
 
 # --- FUNCTION 1: AESTHETIC EVALUATION ---
@@ -60,6 +93,9 @@ def evaluate_property_images(
             exterior_material="unknown",
             has_garden=False,
             aesthetic_verdict="Could not evaluate images.",
+            has_virtual_staging=False,
+            has_wide_angle_distortion=False,
+            epc_rating="Unknown",
         )
 
     prompt = f"""
@@ -67,6 +103,8 @@ def evaluate_property_images(
     The user is looking for a period property with plenty of natural light and large windows.
     Agent Description for context: {description}
     Extract the visual characteristics exactly according to the provided schema.
+    Also, watch out for misleading photos: flag any virtual staging or severe wide-angle distortion.
+    If you see an Energy Performance Certificate (EPC) graph among the images, extract the current rating letter (A-G).
     """
 
     config = {
@@ -95,31 +133,48 @@ def evaluate_property_images(
 
 
 # --- FUNCTION 2: FLOORPLAN SIZING ---
-def extract_square_footage(floorplan_urls: list[str]) -> int:
+def extract_floorplan_details(floorplan_urls: list[str], description: str) -> FloorplanDetails:
+    empty_baseline = FloorplanDetails(
+        total_sqft=0,
+        reception_length_m=0.0,
+        reception_on_ground_floor=False,
+        max_ceiling_height_m=0.0,
+        floor_level=0,
+        has_lift=False,
+        master_bedroom_length_m=0.0,
+    )
+
     if not floorplan_urls:
-        return 0
+        return empty_baseline
 
     try:
         response = requests.get(floorplan_urls[0], timeout=10)
         img = Image.open(BytesIO(response.content))
     except Exception as e:
         logging.error(f"Failed to load floorplan image: {e}")
-        return 0
+        return empty_baseline
 
-    prompt = """
-    Examine this floorplan. Locate the 'Total Gross Internal Area' or similar metric.
-    Return ONLY the numeric value in square feet (sq ft).
-    Do not include text, commas, or symbols. If it is not present, return 0.
+    prompt = f"""
+    Examine this floorplan and the property description below. 
+    Extract the details according to the provided schema.
+    If you find dimensions in feet/inches, please convert them to meters.
+
+    Agent Description for context: {description}
     """
+
+    config = {
+        "response_mime_type": "application/json",
+        "response_schema": FloorplanDetails,
+        "temperature": 0.0,
+    }
 
     try:
         result = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[prompt, img],
-            config={"temperature": 0.0},
+            config=config,
         )
-        # Convert to float first to absorb the decimal, then int to drop it
-        return int(float(result.text.strip().replace(",", "")))
+        return FloorplanDetails.model_validate_json(result.text)
     except Exception as e:
-        logging.error(f"Gemini failed to extract sqft: {e}")
-        return 0
+        logging.error(f"Gemini failed to extract floorplan details: {e}")
+        return empty_baseline
