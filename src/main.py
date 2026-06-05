@@ -84,6 +84,13 @@ def run_pipeline():
                 property_data, visual_metrics, commute_metrics, config
             )
 
+            # 7. Rich Media Dispatch
+            if final_score >= config.get("alert_threshold", 70):
+                logging.info(f"Property {property_data['id']} scored {final_score}! Dispatching Telegram alert.")
+                send_telegram_alert(telegram_token, telegram_chat_id, property_data, final_score)
+            else:
+                logging.info(f"Property {property_data['id']} scored {final_score}, below threshold.")
+
 
 if __name__ == "__main__":
     run_pipeline()
