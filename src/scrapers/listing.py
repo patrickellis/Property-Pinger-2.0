@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 
 def extract_rightmove_data_via_api(url: str, api_key: str) -> dict:
     encoded_target_url = quote(url)
-    proxy_url = f"http://api.scraperapi.com?api_key={api_key}&url={encoded_target_url}&country_code=gb&premium=true"
+    proxy_url = f"http://api.scraperapi.com?api_key={api_key}&url={encoded_target_url}&premium=true"
 
     try:
         response = requests.get(proxy_url, timeout=45)

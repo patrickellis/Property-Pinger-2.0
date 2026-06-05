@@ -14,6 +14,9 @@ from services.telegram import send_telegram_alert
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+logging.getLogger("google").setLevel(logging.WARNING)
+logging.getLogger("google.generativeai").setLevel(logging.WARNING)
+logging.getLogger("absl").setLevel(logging.WARNING)
 
 
 def load_config():
@@ -87,19 +90,24 @@ def run_pipeline():
             )
 
             # 7. Rich Media Dispatch
+            cons = " | ".join(breakdown.get("cons", [])) or "None"
+            pros = " | ".join(breakdown.get("pros", [])) or "None"
+            scorecard = breakdown.get("scorecard", {})
+            score_str = " | ".join(f"{k}: {v}" for k, v in scorecard.items())
+
             if final_score >= config.get("alert_threshold", 70):
-                logging.info(f"Property {property_data['id']} scored {final_score}! Dispatching Telegram alert.")
-                send_telegram_alert(telegram_token, telegram_chat_id, property_data, final_score, breakdown)
+                status_msg = "Dispatching Telegram alert"
             else:
-                cons = " | ".join(breakdown.get("cons", [])) or "None"
-                pros = " | ".join(breakdown.get("pros", [])) or "None"
-                scorecard = breakdown.get("scorecard", {})
-                score_str = " | ".join(f"{k}: {v}" for k, v in scorecard.items())
-                logging.info(
-                    f"Property {property_data['id']} scored {final_score:.1f}, below threshold.\n"
-                    f"  Scorecard: {score_str}\n"
-                    f"  Pros: [{pros}] | Cons: [{cons}]"
-                )
+                status_msg = "below threshold"
+
+            logging.info(
+                f"Property {property_data['id']} scored {final_score:.1f}, {status_msg}.\n"
+                f"  Scorecard: {score_str}\n"
+                f"  Pros: [{pros}] | Cons: [{cons}]"
+            )
+
+            if final_score >= config.get("alert_threshold", 70):
+                send_telegram_alert(telegram_token, telegram_chat_id, property_data, final_score, breakdown)
 
 
 if __name__ == "__main__":

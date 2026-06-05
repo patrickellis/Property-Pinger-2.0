@@ -67,9 +67,11 @@ def calculate_match_score(
     breakdown["scorecard"]["commute"] = round(commute_score, 1)
 
     if commute_score > 0:
-        breakdown["pros"].append(f"{avg_commute}m Commute")
+        import math
+        breakdown["pros"].append(f"{math.ceil(avg_commute)}m Commute")
     elif commute_score < 0:
-        breakdown["cons"].append(f"Long Commute ({avg_commute}m)")
+        import math
+        breakdown["cons"].append(f"Long Commute ({math.ceil(avg_commute)}m)")
 
     # --- 2. Price Scoring ---
     # Rewards properties that leave headroom in the budget
@@ -105,29 +107,29 @@ def calculate_match_score(
     if visual_data.exterior_material.lower() in ["pebble dash", "cladding"]:
         pen = config["penalties"]["ugly_exterior"]
         score += pen
-        breakdown["scorecard"]["penalties"] += pen
+        breakdown["scorecard"]["penalty_ugly_exterior"] = pen
         breakdown["cons"].append(f"Ugly exterior ({visual_data.exterior_material})")
 
     if getattr(visual_data, "has_virtual_staging", False):
         pen = config["penalties"].get("virtual_staging", -15)
         score += pen
-        breakdown["scorecard"]["penalties"] += pen
+        breakdown["scorecard"]["penalty_virtual_staging"] = pen
         breakdown["cons"].append("Virtual Staging")
     if getattr(visual_data, "has_wide_angle_distortion", False):
         pen = config["penalties"].get("wide_angle_distortion", -10)
         score += pen
-        breakdown["scorecard"]["penalties"] += pen
+        breakdown["scorecard"]["penalty_wide_angle_distortion"] = pen
         breakdown["cons"].append("Wide Angle Distortion")
     if getattr(visual_data, "epc_rating", "Unknown") in ["F", "G"]:
         pen = config["penalties"].get("poor_epc_rating", -30)
         score += pen
-        breakdown["scorecard"]["penalties"] += pen
+        breakdown["scorecard"]["penalty_poor_epc"] = pen
         breakdown["cons"].append(f"Poor EPC Rating ({visual_data.epc_rating})")
 
     if property_data.get("is_noisy_location"):
         pen = config["penalties"].get("noisy_location", -20)
         score += pen
-        breakdown["scorecard"]["penalties"] += pen
+        breakdown["scorecard"]["penalty_noisy_location"] = pen
         breakdown["cons"].append("Noisy Location (near A-road/railway)")
 
     # --- 4. Size Scoring (Bonus) ---
@@ -155,13 +157,13 @@ def calculate_match_score(
         if property_data["reception_length_m"] < 2.14:
             pen = config["penalties"].get("small_reception", -20)
             score += pen
-            breakdown["scorecard"]["penalties"] += pen
+            breakdown["scorecard"]["penalty_small_reception"] = pen
             breakdown["cons"].append(f"Small Reception ({property_data['reception_length_m']}m)")
         
         if not property_data.get("reception_on_ground_floor", True):
             pen = config["penalties"].get("not_ground_floor_reception", -15)
             score += pen
-            breakdown["scorecard"]["penalties"] += pen
+            breakdown["scorecard"]["penalty_not_ground_floor_reception"] = pen
             breakdown["cons"].append("Upper Floor Reception")
 
     hc_score = 0
