@@ -1,0 +1,7 @@
+requests
+beautifulsoup4
+google-genai
+google-cloud-firestore
+pydantic
+pyyaml
+Pillow

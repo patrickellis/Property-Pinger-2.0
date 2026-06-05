@@ -1,0 +1,42 @@
+search_urls:
+  - "https://www.rightmove.co.uk/property-to-rent/find.html?propertyTypes=detached%2Csemi-detached%2Cterraced&maxBedrooms=5&keywords=character%2Cperiod%2Cvictorian&sortType=18&minPrice=3000&areaSizeUnit=sqft&channel=RENT&index=0&locationIdentifier=OUTCODE%5E2516&transactionType=LETTING&displayLocationIdentifier=SW3&radius=1.0"
+  - "https://www.rightmove.co.uk/property-to-rent/map.html?keywords=edwardian%2Cgeorgian%2Ccharacter&sortType=18&areaSizeUnit=sqft&viewType=MAP&channel=RENT&index=0&locationIdentifier=REGION%5E87490&numberOfPropertiesPerPage=95&transactionType=LETTING&displayLocationIdentifier=undefined&propertyTypes=detached%2Csemi-detached%2Cterraced%2Cflat%2Cbungalow%2Cland%2Cpark-home%2Cprivate-halls&furnishTypes=furnished%2CpartFurnished%2Cunfurnished&radius=1.0"
+max_search_pages: 5
+alert_threshold: 70
+
+dealbreakers:
+  max_price_pcm: 12000
+  min_bedrooms: 1
+  min_total_sqft: 0
+  required_furnishing:
+    - "furnished"
+    - "part-furnished"
+    - "unfurnished"
+    - "unknown"
+  requires_lift_if_above_floor: 1
+  max_commute_mins: 45
+
+locations:
+  hubs:
+    - "South Kensington Station, London"
+    - "Harley Street, London"
+    - "Grosvenor Square, London"
+    - "Regent's Park, London"
+    - "Hyde Park, London"
+  venues:
+    - "Climbing Gym Sen, London"
+    - "Royal College of Music, London"
+  transit_mode: "transit"
+
+weights:
+  price: 15
+  commute: 15
+  total_size: 10
+  bedroom_size: 10
+  natural_light: 20
+  period_features: 15
+  sash_windows: 5
+  garden: 10
+
+penalties:
+  ugly_exterior: -15
