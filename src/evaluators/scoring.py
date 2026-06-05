@@ -40,7 +40,7 @@ def calculate_match_score(
     """
     weights = config["weights"]
     score = 0
-    breakdown = {"pros": [], "cons": [], "scorecard": {"penalties": 0}}
+    breakdown = {"pros": [], "cons": [], "scorecard": {}}
 
     # --- 1. Commute Scoring ---
     avg_commute = commute_metrics.get("average_mins", 999)
