@@ -1,6 +1,8 @@
 import requests
 import logging
+from tenacity import retry, wait_exponential, stop_after_attempt
 
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
 def get_commute_times(origin_lat: float, origin_lng: float, destinations: list[str], mode: str, api_key: str) -> dict:
     """
     Calculates the commute time from the property coordinates to a list of destinations.
@@ -39,6 +41,7 @@ def get_commute_times(origin_lat: float, origin_lng: float, destinations: list[s
         logging.error(f"Google Maps API request failed: {e}")
         return {'average_mins': 999, 'details': {}}
 
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
 def check_noise_pollution(lat: float, lng: float) -> bool:
     """
     Checks if the coordinates are within 50 meters of a major road (primary/trunk) or railway.

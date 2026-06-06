@@ -1,0 +1,50 @@
+# Maximum number of pages to paginate through per search URL.
+max_search_pages: 20
+
+# Minimum final match score out of 100 required to send a Telegram alert.
+alert_threshold: 70
+
+# Properties scoring below this threshold are marked as ignored and never re-evaluated.
+ignore_threshold: 50
+
+dealbreakers:
+  # Maximum monthly rent in GBP. Properties above this are instantly rejected.
+  max_price_pcm: 12000
+  # Minimum number of bedrooms.
+  min_bedrooms: 1
+  # Minimum total size in square feet (0 to disable).
+  min_total_sqft: 0
+  # Acceptable furnishing states (valid options: "furnished", "part furnished", "unfurnished", "unknown").
+  required_furnishing:
+    - "furnished or unfurnished, landlord is flexible"
+    - "furnished"
+    - "part furnished"
+    - "part-furnished"
+    - "unfurnished"
+    - "unknown"
+  # Maximum floor level before a lift is strictly required.
+  requires_lift_if_above_floor: 1
+  # Target maximum average commute time in minutes. Commutes over this incur a penalty.
+  max_commute_mins: 60
+
+weights:
+  # Positive score additions (bonuses) for desirable traits.
+  price: 15
+  commute: 15
+  total_size: 10
+  bedroom_size: 0
+  natural_light: 20
+  period_features: 15
+  sash_windows: 5
+  garden: 10
+  high_ceilings: 15
+
+penalties:
+  # Negative score deductions for undesirable traits.
+  ugly_exterior: -15
+  small_reception: -20
+  not_ground_floor_reception: -15
+  virtual_staging: -15
+  wide_angle_distortion: -10
+  poor_epc_rating: -30
+  noisy_location: -20

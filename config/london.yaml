@@ -1,0 +1,14 @@
+search_urls:
+  - "https://www.rightmove.co.uk/property-to-rent/map.html?keywords=edwardian%2Cgeorgian%2Ccharacter&sortType=18&areaSizeUnit=sqft&viewType=MAP&channel=RENT&index=0&locationIdentifier=REGION%5E87490&numberOfPropertiesPerPage=95&transactionType=LETTING&displayLocationIdentifier=undefined&propertyTypes=detached%2Csemi-detached%2Cterraced%2Cflat%2Cbungalow%2Cland%2Cpark-home%2Cprivate-halls&furnishTypes=furnished%2CpartFurnished%2Cunfurnished&radius=1.0"
+
+locations:
+  hubs:
+    - "South Kensington Station, London"
+    - "Harley Street, London"
+    - "Grosvenor Square, London"
+    - "Regent's Park, London"
+    - "Hyde Park, London"
+  venues:
+    - "Climbing Gym Sen, London"
+    - "Royal College of Music, London"
+  transit_mode: "transit"

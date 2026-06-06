@@ -6,6 +6,7 @@ from google import genai
 from google.genai import errors
 from PIL import Image
 from pydantic import BaseModel, Field
+from tenacity import retry, wait_exponential, stop_after_attempt
 
 # Initialize the client. GCP automatically injects GEMINI_API_KEY from Secret Manager.
 client = genai.Client()
@@ -70,6 +71,7 @@ class FloorplanDetails(BaseModel):
 
 
 # --- FUNCTION 1: AESTHETIC EVALUATION ---
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
 def evaluate_property_images(
     image_urls: list[str], description: str = ""
 ) -> PropertyVisuals:
@@ -133,6 +135,7 @@ def evaluate_property_images(
 
 
 # --- FUNCTION 2: FLOORPLAN SIZING ---
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
 def extract_floorplan_details(floorplan_urls: list[str], description: str) -> FloorplanDetails:
     empty_baseline = FloorplanDetails(
         total_sqft=0,

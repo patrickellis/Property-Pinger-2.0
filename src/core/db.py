@@ -11,75 +11,63 @@ try:
 except Exception as e:
     logging.error(f"Failed to initialize Firestore client: {e}")
     db = None
+    collection_ref = None
 
 def get_config_mtime() -> datetime:
     """
-    Reads the modification time of config.yaml inside the container
-    and returns a timezone-aware UTC datetime.
+    Reads the modification time of config files and returns the newest timezone-aware UTC datetime.
     """
     try:
-        path = 'config.yaml'
-        if os.path.exists(path):
-            mtime = os.path.getmtime(path)
-            return datetime.fromtimestamp(mtime, tz=timezone.utc)
+        paths = ["config/defaults.yaml", os.environ.get("CONFIG_PATH", "config/london.yaml")]
+        max_mtime = 0
+        for path in paths:
+            if os.path.exists(path):
+                max_mtime = max(max_mtime, os.path.getmtime(path))
+        if max_mtime > 0:
+            return datetime.fromtimestamp(max_mtime, tz=timezone.utc)
     except Exception as e:
-        logging.error(f"Failed to read config.yaml modification time: {e}")
+        logging.error(f"Failed to read config modification time: {e}")
     
-    # Fallback to current time if the file read fails (forces a safe re-evaluation)
     return datetime.now(timezone.utc)
 
-def check_and_log_property(property_id: str) -> bool:
-    """
-    Checks if a property exists in Firestore.
-    Returns True if it is brand new OR if the configuration file has been 
-    modified since this specific property was last evaluated.
-    """
+def get_property_cache(property_id: str) -> dict:
     if not db:
-        logging.warning("Firestore client unavailable. Proceeding without state checking.")
-        return True # Fail-open
-
-    prop_id = str(property_id)
-    doc_ref = collection_ref.document(prop_id)
-    config_mtime = get_config_mtime()
-    
+        return {}
     try:
-        doc = doc_ref.get()
+        doc = collection_ref.document(str(property_id)).get()
         if doc.exists:
             data = doc.to_dict() or {}
-            ts = data.get('timestamp')
-            
-            if ts:
-                # Ensure the database timestamp is timezone-aware for comparison
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                
-                date_str = ts.strftime('%Y-%m-%d %H:%M:%S UTC')
-                
-                # --- CORE LOGIC: Has config changed since last evaluation? ---
-                if config_mtime > ts:
-                    config_str = config_mtime.strftime('%Y-%m-%d %H:%M:%S UTC')
-                    logging.info(
-                        f"[{prop_id}] Config update detected ({config_str} > {date_str}). "
-                        f"Bypassing cache to re-evaluate property."
-                    )
-                    # Update the timestamp immediately to reflect this fresh run configuration
-                    doc_ref.set({
-                        'id': prop_id,
-                        'timestamp': firestore.SERVER_TIMESTAMP
-                    }, merge=True)
-                    return True
-                
-                logging.info(f"[{prop_id}] Already processed on {date_str} under current config. Skipping.")
-                return False
-            
-        # Brand new property execution path
-        doc_ref.set({
-            'id': prop_id,
-            'timestamp': firestore.SERVER_TIMESTAMP
-        })
-        logging.info(f"[{prop_id}] Successfully logged new property to Firestore.")
-        return True
-        
+            # Convert timestamps to timezone aware
+            for field in ['scraped_at', 'evaluated_at']:
+                if data.get(field) and data[field].tzinfo is None:
+                    data[field] = data[field].replace(tzinfo=timezone.utc)
+            return data
     except GoogleAPIError as e:
         logging.error(f"Database connection error: {e}")
-        return True
+    return {}
+
+def save_scraped_data(property_id: str, raw_data: dict):
+    if not db:
+        return
+    try:
+        collection_ref.document(str(property_id)).set({
+            'id': str(property_id),
+            'raw_data': raw_data,
+            'scraped_at': firestore.SERVER_TIMESTAMP
+        }, merge=True)
+        logging.info(f"[{property_id}] Saved raw scraped data to Firestore.")
+    except GoogleAPIError as e:
+        logging.error(f"Database save error: {e}")
+
+def mark_evaluated(property_id: str, ignored: bool = False):
+    if not db:
+        return
+    try:
+        collection_ref.document(str(property_id)).set({
+            'evaluated_at': firestore.SERVER_TIMESTAMP,
+            'ignored': ignored
+        }, merge=True)
+        if ignored:
+            logging.info(f"[{property_id}] Marked as ignored due to low score or dealbreakers.")
+    except GoogleAPIError as e:
+        logging.error(f"Database evaluation mark error: {e}")

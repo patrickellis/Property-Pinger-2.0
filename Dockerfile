@@ -5,7 +5,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
-COPY config.yaml .
+COPY config/ ./config/
 
 # Set Python path so modules resolve correctly
 ENV PYTHONPATH=/app/src
