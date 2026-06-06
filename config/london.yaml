@@ -9,6 +9,5 @@ locations:
     - "Regent's Park, London"
     - "Hyde Park, London"
   venues:
-    - "Climbing Gym Sen, London"
     - "Royal College of Music, London"
   transit_mode: "transit"

@@ -15,6 +15,7 @@ def send_telegram_alert(bot_token: str, chat_id: str, property_data: PropertyLis
         f"💷 £{property_data.price_pcm} pcm\n"
         f"🛏️ {property_data.bedrooms} Bed | 📏 {property_data.sqft or 'Unknown'} sqft\n"
         f"🏡 Type: {property_data.property_type}\n"
+        f"🚆 Commute: {property_data.commute_mins or 'Unknown'} mins\n"
         f"📅 {property_data.listing_update or 'Date Unknown'}\n\n"
     )
     
@@ -34,6 +35,6 @@ def send_telegram_alert(bot_token: str, chat_id: str, property_data: PropertyLis
     
     try:
         requests.post(url, json=payload)
-        logging.info(f"Alert sent for {property_data['id']}")
+        logging.info(f"Alert sent for {property_data.id}")
     except Exception as e:
         logging.error(f"Failed to send Telegram alert: {e}")

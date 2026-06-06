@@ -9,19 +9,23 @@ def passes_dealbreakers(property_data: PropertyListing, config: dict) -> bool:
     db = config["dealbreakers"]
     prop_id = property_data.id
 
-    if property_data.price_pcm > db["max_price_pcm"]:
-        logging.info(
-            f"[{prop_id}] Rejected: Price £{property_data.price_pcm} pcm exceeds max £{db['max_price_pcm']} pcm."
-        )
-        return False
-
     if property_data.bedrooms < db["min_bedrooms"]:
         logging.info(
             f"[{prop_id}] Rejected: Bedrooms ({property_data.bedrooms}) below min required ({db['min_bedrooms']})."
         )
         return False
 
+    if property_data.bedrooms > db.get("max_bedrooms", 5):
+        logging.info(
+            f"[{prop_id}] Rejected: Bedrooms ({property_data.bedrooms}) above max required ({db.get('max_bedrooms', 5)})."
+        )
+        return False
 
+    if property_data.price_pcm > db["max_price_pcm"]:
+        logging.info(
+            f"[{prop_id}] Rejected: Price (£{property_data.price_pcm}) exceeds maximum budget (£{db['max_price_pcm']})."
+        )
+        return False
 
     if property_data.furnishing not in db.get("required_furnishing", ["unknown"]):
         logging.info(
@@ -45,6 +49,7 @@ def calculate_match_score(
 
     # --- 1. Commute Scoring ---
     avg_commute = commute_metrics.get("average_mins", 999)
+    property_data.commute_mins = avg_commute if avg_commute != 999 else None
     max_commute = config["dealbreakers"]["max_commute_mins"]
 
     # --- Lift Dealbreaker ---
@@ -54,7 +59,7 @@ def calculate_match_score(
     
     if floor_level > lift_threshold and not has_lift:
         logging.info(f"Property {property_data.id} failed lift dealbreaker (Floor {floor_level}, No Lift).")
-        return 0.0, {"pros": [], "cons": [f"Missing required lift (Floor {floor_level})"]}
+        breakdown["cons"].append(f"Missing required lift (Floor {floor_level})")
 
     # Calculate score (positive if under max, negative if over)
     if max_commute == 0:

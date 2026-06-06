@@ -83,7 +83,9 @@ def mark_evaluated(property_id: str, ignored: bool = False, score: float = 0.0, 
                 'bedrooms': property_data.bedrooms,
                 'latitude': property_data.latitude,
                 'longitude': property_data.longitude,
-                'property_type': property_data.property_type
+                'property_type': property_data.property_type,
+                'commute_mins': property_data.commute_mins,
+                'raw_data': property_data.model_dump()
             })
             
         collection_ref.document(str(property_id)).set(update_data, merge=True)

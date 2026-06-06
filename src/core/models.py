@@ -31,6 +31,25 @@ class PropertyListing(BaseModel):
     has_lift: Optional[bool] = None
     master_bedroom_length_m: Optional[float] = None
     is_noisy_location: Optional[bool] = None
+    commute_mins: Optional[int] = None
+    
+    # Gemini Vision Fields
+    natural_light_score: Optional[int] = None
+    is_period_property: Optional[bool] = None
+    has_sash_windows: Optional[bool] = None
+    has_large_windows: Optional[bool] = None
+    exterior_material: Optional[str] = None
+    aesthetic_verdict: Optional[str] = None
+    has_virtual_staging: Optional[bool] = None
+    has_wide_angle_distortion: Optional[bool] = None
+    epc_rating: Optional[str] = None
+
+    # Google Maps Commute Fields
+    commute_metrics_raw: Optional[Dict[str, Any]] = None
+    
+    # Cache Invalidators
+    image_count: Optional[int] = None
+    floorplan_count: Optional[int] = None
 
     @field_validator("price_pcm", mode="before")
     @classmethod

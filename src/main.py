@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from core.db import get_property_cache, save_scraped_data, mark_evaluated, get_config_mtime
 from evaluators.scoring import calculate_match_score, passes_dealbreakers
-from evaluators.vision import evaluate_property_images, extract_floorplan_details
+from evaluators.vision import evaluate_property_images, extract_floorplan_details, PropertyVisuals
 from scrapers.listing import extract_rightmove_data_via_api
 from scrapers.search import fetch_search_results
 from services.maps import get_commute_times, check_noise_pollution
@@ -62,7 +62,7 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
     needs_eval = True
 
     now = datetime.now(timezone.utc)
-    if scraped_at and (now - scraped_at).days < 14:
+    if scraped_at and (now - scraped_at).days < 7:
         if doc_data.get("raw_data"):
             needs_scrape = False
             property_data = doc_data["raw_data"]
@@ -84,38 +84,115 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         mark_evaluated(property_id, ignored=True, property_data=property_data)
         return
 
+    # --- CACHE BYPASS CHECKS ---
+    old_raw = doc_data.get("raw_data")
+    if old_raw and isinstance(old_raw, PropertyListing):
+        images_changed = len(property_data.images) != old_raw.image_count
+        floorplans_changed = len(property_data.floorplans) != old_raw.floorplan_count
+        location_changed = (property_data.latitude != old_raw.latitude) or (property_data.longitude != old_raw.longitude)
+    else:
+        images_changed = True
+        floorplans_changed = True
+        location_changed = True
+
+    property_data.image_count = len(property_data.images)
+    property_data.floorplan_count = len(property_data.floorplans)
+
     # 4. Extract Floorplan Details via Gemini (Fast Path)
-    floorplan_details = extract_floorplan_details(
-        property_data.floorplans,
-        property_data.description
-    )
-    property_data.sqft = floorplan_details.total_sqft
-    property_data.reception_length_m = floorplan_details.reception_length_m
-    property_data.reception_on_ground_floor = floorplan_details.reception_on_ground_floor
-    property_data.max_ceiling_height_m = floorplan_details.max_ceiling_height_m
-    property_data.floor_level = floorplan_details.floor_level
-    property_data.has_lift = floorplan_details.has_lift
-    property_data.master_bedroom_length_m = floorplan_details.master_bedroom_length_m
+    if floorplans_changed or not old_raw:
+        floorplan_details = extract_floorplan_details(
+            property_data.floorplans,
+            property_data.description
+        )
+        
+        sqft_match = re.search(r'(\d[,.\d]*)\s*(sq\s*ft|square\s*feet|sqft)', property_data.description, re.IGNORECASE)
+        sqft_from_desc = 0
+        if sqft_match:
+            try:
+                sqft_from_desc = int(float(sqft_match.group(1).replace(',', '')))
+            except:
+                pass
+                
+        property_data.sqft = floorplan_details.total_sqft or sqft_from_desc
+        property_data.reception_length_m = floorplan_details.reception_length_m
+        property_data.reception_on_ground_floor = floorplan_details.reception_on_ground_floor
+        property_data.max_ceiling_height_m = floorplan_details.max_ceiling_height_m
+        property_data.floor_level = floorplan_details.floor_level
+        
+        # Fallback to regex since Gemini short-circuits when floorplans are missing
+        has_lift_from_desc = bool(re.search(r'\b(lift|elevator)\b', property_data.description, re.IGNORECASE))
+        property_data.has_lift = floorplan_details.has_lift or has_lift_from_desc
+        
+        property_data.master_bedroom_length_m = floorplan_details.master_bedroom_length_m
+    else:
+        logging.info(f"[{property_id}] Skipping Gemini Floorplan (cache hit)")
+        property_data.sqft = old_raw.sqft
+        property_data.reception_length_m = old_raw.reception_length_m
+        property_data.reception_on_ground_floor = old_raw.reception_on_ground_floor
+        property_data.max_ceiling_height_m = old_raw.max_ceiling_height_m
+        property_data.floor_level = old_raw.floor_level
+        property_data.has_lift = old_raw.has_lift
+        property_data.master_bedroom_length_m = old_raw.master_bedroom_length_m
 
-    # 5. Heavy Evaluation
-    visual_metrics = evaluate_property_images(
-        property_data.images, property_data.description
-    )
+    # 5. Heavy Evaluation (Visuals)
+    if images_changed or not old_raw or old_raw.natural_light_score is None:
+        visual_metrics = evaluate_property_images(
+            property_data.images, property_data.description
+        )
+        property_data.natural_light_score = visual_metrics.natural_light_score
+        property_data.is_period_property = visual_metrics.is_period_property
+        property_data.has_sash_windows = visual_metrics.has_sash_windows
+        property_data.has_large_windows = visual_metrics.has_large_windows
+        property_data.exterior_material = visual_metrics.exterior_material
+        property_data.aesthetic_verdict = visual_metrics.aesthetic_verdict
+        property_data.has_virtual_staging = visual_metrics.has_virtual_staging
+        property_data.has_wide_angle_distortion = visual_metrics.has_wide_angle_distortion
+        property_data.epc_rating = visual_metrics.epc_rating
+    else:
+        logging.info(f"[{property_id}] Skipping Gemini Vision (cache hit)")
+        visual_metrics = PropertyVisuals(
+            natural_light_score=old_raw.natural_light_score or 5,
+            is_period_property=old_raw.is_period_property or False,
+            has_sash_windows=old_raw.has_sash_windows or False,
+            has_large_windows=old_raw.has_large_windows or False,
+            exterior_material=old_raw.exterior_material or "unknown",
+            aesthetic_verdict=old_raw.aesthetic_verdict or "",
+            has_virtual_staging=old_raw.has_virtual_staging or False,
+            has_wide_angle_distortion=old_raw.has_wide_angle_distortion or False,
+            epc_rating=old_raw.epc_rating or "Unknown",
+            has_garden=property_data.has_garden
+        )
+        property_data.natural_light_score = old_raw.natural_light_score
+        property_data.is_period_property = old_raw.is_period_property
+        property_data.has_sash_windows = old_raw.has_sash_windows
+        property_data.has_large_windows = old_raw.has_large_windows
+        property_data.exterior_material = old_raw.exterior_material
+        property_data.aesthetic_verdict = old_raw.aesthetic_verdict
+        property_data.has_virtual_staging = old_raw.has_virtual_staging
+        property_data.has_wide_angle_distortion = old_raw.has_wide_angle_distortion
+        property_data.epc_rating = old_raw.epc_rating
 
-    # Fetch commute times (Assuming you added Google Maps API to GCP Secret Manager)
-    commute_metrics = get_commute_times(
-        origin_lat=property_data.latitude,
-        origin_lng=property_data.longitude,
-        destinations=config["locations"]["hubs"]
-        + config["locations"]["venues"],
-        mode=config["locations"]["transit_mode"],
-        api_key=os.environ.get("GOOGLE_MAPS_API_KEY", ""),
-    )
-
-    # 6. Final Scoring (Pass the commute metrics in)
-    property_data.is_noisy_location = check_noise_pollution(
-        property_data.latitude, property_data.longitude
-    )
+    # 6. Heavy Evaluation (Google Maps & Overpass)
+    if location_changed or not old_raw or old_raw.commute_metrics_raw is None:
+        commute_metrics = get_commute_times(
+            origin_lat=property_data.latitude,
+            origin_lng=property_data.longitude,
+            destinations=config["locations"]["hubs"]
+            + config["locations"]["venues"],
+            mode=config["locations"]["transit_mode"],
+            api_key=os.environ.get("GOOGLE_MAPS_API_KEY", ""),
+        )
+        property_data.is_noisy_location = check_noise_pollution(
+            property_data.latitude, property_data.longitude
+        )
+        property_data.commute_metrics_raw = commute_metrics
+        property_data.commute_mins = commute_metrics.get("average_mins")
+    else:
+        logging.info(f"[{property_id}] Skipping Maps API (cache hit)")
+        commute_metrics = old_raw.commute_metrics_raw
+        property_data.commute_metrics_raw = old_raw.commute_metrics_raw
+        property_data.is_noisy_location = old_raw.is_noisy_location
+        property_data.commute_mins = old_raw.commute_mins
 
     final_score, breakdown = calculate_match_score(
         property_data, visual_metrics, commute_metrics, config
@@ -127,10 +204,9 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
     scorecard = breakdown.get("scorecard", {})
     score_str = " | ".join(f"{k}: {v}" for k, v in scorecard.items())
 
-    is_ignored = final_score < ignore_threshold
     mark_evaluated(
         property_id, 
-        ignored=is_ignored, 
+        ignored=False, 
         score=final_score, 
         breakdown=breakdown, 
         property_data=property_data
@@ -139,8 +215,6 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
     if final_score >= config.get("alert_threshold", 70):
         status_msg = "Dispatching Telegram alert"
         send_telegram_alert(telegram_token, telegram_chat_id, property_data, final_score, breakdown)
-    elif is_ignored:
-        status_msg = f"Ignored (score < {ignore_threshold})"
     else:
         status_msg = "Below alert threshold"
 
@@ -149,9 +223,6 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         f"  Scorecard: {score_str}\n"
         f"  Pros: [{pros}] | Cons: [{cons}]"
     )
-
-    if is_ignored:
-        return
 
 def run_pipeline():
     import concurrent.futures
