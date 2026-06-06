@@ -12,6 +12,7 @@ from scrapers.listing import extract_rightmove_data_via_api
 from scrapers.search import fetch_search_results
 from services.maps import get_commute_times, check_noise_pollution
 from services.telegram import send_telegram_alert
+from core.models import PropertyListing
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -80,31 +81,31 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
 
     # 2. Hard Filters (Zero/Low Cost)
     if not passes_dealbreakers(property_data, config):
-        mark_evaluated(property_id, ignored=True)
+        mark_evaluated(property_id, ignored=True, property_data=property_data)
         return
 
     # 4. Extract Floorplan Details via Gemini (Fast Path)
     floorplan_details = extract_floorplan_details(
-        property_data.get("floorplans", []),
-        property_data.get("description", "")
+        property_data.floorplans,
+        property_data.description
     )
-    property_data["sqft"] = floorplan_details.total_sqft
-    property_data["reception_length_m"] = floorplan_details.reception_length_m
-    property_data["reception_on_ground_floor"] = floorplan_details.reception_on_ground_floor
-    property_data["max_ceiling_height_m"] = floorplan_details.max_ceiling_height_m
-    property_data["floor_level"] = floorplan_details.floor_level
-    property_data["has_lift"] = floorplan_details.has_lift
-    property_data["master_bedroom_length_m"] = floorplan_details.master_bedroom_length_m
+    property_data.sqft = floorplan_details.total_sqft
+    property_data.reception_length_m = floorplan_details.reception_length_m
+    property_data.reception_on_ground_floor = floorplan_details.reception_on_ground_floor
+    property_data.max_ceiling_height_m = floorplan_details.max_ceiling_height_m
+    property_data.floor_level = floorplan_details.floor_level
+    property_data.has_lift = floorplan_details.has_lift
+    property_data.master_bedroom_length_m = floorplan_details.master_bedroom_length_m
 
     # 5. Heavy Evaluation
     visual_metrics = evaluate_property_images(
-        property_data["images"], property_data.get("description", "")
+        property_data.images, property_data.description
     )
 
     # Fetch commute times (Assuming you added Google Maps API to GCP Secret Manager)
     commute_metrics = get_commute_times(
-        origin_lat=property_data.get("latitude"),
-        origin_lng=property_data.get("longitude"),
+        origin_lat=property_data.latitude,
+        origin_lng=property_data.longitude,
         destinations=config["locations"]["hubs"]
         + config["locations"]["venues"],
         mode=config["locations"]["transit_mode"],
@@ -112,38 +113,45 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
     )
 
     # 6. Final Scoring (Pass the commute metrics in)
-    property_data["is_noisy_location"] = check_noise_pollution(
-        property_data.get("latitude"), property_data.get("longitude")
+    property_data.is_noisy_location = check_noise_pollution(
+        property_data.latitude, property_data.longitude
     )
 
     final_score, breakdown = calculate_match_score(
         property_data, visual_metrics, commute_metrics, config
     )
 
-    is_ignored = final_score < ignore_threshold
-    mark_evaluated(property_id, ignored=is_ignored)
-    
-    if is_ignored:
-        logging.info(f"[{property_id}] Scored {final_score:.1f} (< {ignore_threshold}). Ignoring future evaluations.")
-        return
-
-    # 7. Rich Media Dispatch
+    # Prepare Rich Logging Data
     cons = " | ".join(breakdown.get("cons", [])) or "None"
     pros = " | ".join(breakdown.get("pros", [])) or "None"
     scorecard = breakdown.get("scorecard", {})
     score_str = " | ".join(f"{k}: {v}" for k, v in scorecard.items())
 
+    is_ignored = final_score < ignore_threshold
+    mark_evaluated(
+        property_id, 
+        ignored=is_ignored, 
+        score=final_score, 
+        breakdown=breakdown, 
+        property_data=property_data
+    )
+    
     if final_score >= config.get("alert_threshold", 70):
         status_msg = "Dispatching Telegram alert"
         send_telegram_alert(telegram_token, telegram_chat_id, property_data, final_score, breakdown)
+    elif is_ignored:
+        status_msg = f"Ignored (score < {ignore_threshold})"
     else:
-        status_msg = "below threshold"
+        status_msg = "Below alert threshold"
 
     logging.info(
-        f"Property {property_data['id']} scored {final_score:.1f}, {status_msg}.\n"
+        f"[{property_id}] Scored {final_score:.1f} - {status_msg}.\n"
         f"  Scorecard: {score_str}\n"
         f"  Pros: [{pros}] | Cons: [{cons}]"
     )
+
+    if is_ignored:
+        return
 
 def run_pipeline():
     import concurrent.futures
@@ -151,6 +159,11 @@ def run_pipeline():
     config = load_config()
 
     # Load secrets from environment (injected by GCP Secret Manager)
+    required_vars = ["SCRAPER_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+    for var in required_vars:
+        if var not in os.environ:
+            raise ValueError(f"Missing required environment variable: {var}")
+
     scraper_key = os.environ["SCRAPER_API_KEY"]
     telegram_token = os.environ["TELEGRAM_BOT_TOKEN"]
     telegram_chat_id = os.environ["TELEGRAM_CHAT_ID"]
@@ -183,7 +196,7 @@ def run_pipeline():
             try:
                 future.result()
             except Exception as e:
-                logging.error(f"Property evaluation thread failed: {e}")
+                logging.exception("Property evaluation thread failed")
 
 
 if __name__ == "__main__":

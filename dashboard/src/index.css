@@ -1,0 +1,316 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+@import 'leaflet/dist/leaflet.css';
+
+:root {
+  --bg-dark: #0f172a;
+  --bg-card: rgba(30, 41, 59, 0.7);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --accent: #3b82f6;
+  --accent-hover: #60a5fa;
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  --danger: #ef4444;
+  --success: #10b981;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--bg-dark);
+  color: var(--text-primary);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+.dashboard-layout {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Glassmorphism Classes */
+.glass {
+  background: var(--bg-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+/* Sidebar */
+.sidebar {
+  width: 320px;
+  height: 100%;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  z-index: 10;
+}
+
+.sidebar h1 {
+  font-weight: 700;
+  font-size: 1.5rem;
+  background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-group label {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.filter-group input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.filter-group .value-display {
+  text-align: right;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.toggle-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.toggle-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+.toggle-switch.active {
+  background: var(--accent);
+}
+
+.toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background: white;
+  border-radius: 50%;
+  transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+.toggle-switch.active::after {
+  transform: translateX(20px);
+}
+
+/* Map Area */
+.map-container {
+  flex: 1;
+  height: 100%;
+  position: relative;
+}
+
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+/* Custom Marker */
+.custom-marker {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 36px !important;
+  height: 36px !important;
+  background: var(--accent);
+  border: 2px solid white;
+  border-radius: 50%;
+  color: white;
+  font-weight: 700;
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.custom-marker:hover {
+  transform: scale(1.15);
+  z-index: 1000 !important;
+  background: var(--bg-dark);
+  border-color: var(--accent);
+}
+
+.custom-marker.ignored {
+  background: var(--danger);
+  opacity: 0.7;
+}
+
+/* Property Drawer */
+.property-drawer {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  width: 380px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 24px;
+  border-radius: 16px;
+  z-index: 10;
+  transform: translateX(120%);
+  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  opacity: 0;
+}
+
+.property-drawer.open {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+.drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.drawer-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.drawer-close:hover {
+  color: var(--text-primary);
+}
+
+.property-image {
+  width: 100%;
+  height: 200px;
+  object-fit: cover;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+
+.score-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-weight: 700;
+  font-size: 1.2rem;
+  background: rgba(59, 130, 246, 0.2);
+  color: var(--accent-hover);
+  border: 1px solid var(--accent);
+  margin-bottom: 16px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.metric-card {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 12px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metric-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.metric-value {
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.pros-cons {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pro-item, .con-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.pro-item svg {
+  color: var(--success);
+  flex-shrink: 0;
+}
+
+.con-item svg {
+  color: var(--danger);
+  flex-shrink: 0;
+}
+
+.link-button {
+  display: block;
+  width: 100%;
+  padding: 12px;
+  text-align: center;
+  background: var(--accent);
+  color: white;
+  text-decoration: none;
+  border-radius: 8px;
+  font-weight: 600;
+  margin-top: 24px;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.link-button:hover {
+  background: var(--accent-hover);
+}
+
+.link-button:active {
+  transform: scale(0.98);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.2);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.4);
+}

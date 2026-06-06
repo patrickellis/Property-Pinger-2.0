@@ -41,7 +41,7 @@ def get_commute_times(origin_lat: float, origin_lng: float, destinations: list[s
         logging.error(f"Google Maps API request failed: {e}")
         return {'average_mins': 999, 'details': {}}
 
-@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
+@retry(wait=wait_exponential(multiplier=2, min=5, max=60), stop=stop_after_attempt(5))
 def check_noise_pollution(lat: float, lng: float) -> bool:
     """
     Checks if the coordinates are within 50 meters of a major road (primary/trunk) or railway.

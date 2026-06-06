@@ -6,9 +6,10 @@ import requests
 from bs4 import BeautifulSoup
 from tenacity import retry, wait_exponential, stop_after_attempt
 
+from core.models import PropertyListing
 
 @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
-def extract_rightmove_data_via_api(url: str, api_key: str) -> dict:
+def extract_rightmove_data_via_api(url: str, api_key: str) -> PropertyListing | None:
     encoded_target_url = quote(url)
     proxy_url = f"http://api.scraperapi.com?api_key={api_key}&url={encoded_target_url}&premium=true"
 
@@ -97,16 +98,15 @@ def extract_rightmove_data_via_api(url: str, api_key: str) -> dict:
             "furnishing": (
                 (prop_info.get("lettings") or {}).get("furnishType") or "unknown"
             ).lower(),
+            "listing_update": (prop_info.get("listingHistory") or {}).get("listingUpdateReason") or prop_info.get("addedOrReduced", "Date Unknown"),
             "images": [img.get("url", "") for img in (prop_info.get("images") or [])],
             "floorplans": [
                 fp.get("url", "") for fp in (prop_info.get("floorplans") or [])
             ],
         }
 
-        if cleaned_data["price_pcm"].isdigit():
-            cleaned_data["price_pcm"] = int(cleaned_data["price_pcm"])
-
-        return cleaned_data
+        # Let Pydantic handle the price parsing and fallback
+        return PropertyListing(**cleaned_data)
 
     except json.JSONDecodeError as e:
         logging.error(f"Failed to decode JSON for {url}: {e}")
