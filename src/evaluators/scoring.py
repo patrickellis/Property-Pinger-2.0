@@ -2,7 +2,7 @@ import logging
 import math
 from core.models import PropertyListing
 
-def passes_dealbreakers(property_data: PropertyListing, config: dict) -> bool:
+def passes_dealbreakers(property_data: PropertyListing, config: dict) -> tuple[bool, str | None]:
     """
     Evaluates zero-cost, hard constraints before we spend money on Gemini or Maps APIs.
     """
@@ -10,30 +10,26 @@ def passes_dealbreakers(property_data: PropertyListing, config: dict) -> bool:
     prop_id = property_data.id
 
     if property_data.bedrooms < db["min_bedrooms"]:
-        logging.info(
-            f"[{prop_id}] Rejected: Bedrooms ({property_data.bedrooms}) below min required ({db['min_bedrooms']})."
-        )
-        return False
+        reason = f"Bedrooms ({property_data.bedrooms}) below min required ({db['min_bedrooms']})."
+        logging.info(f"[{prop_id}] Rejected: {reason}")
+        return False, reason
 
     if property_data.bedrooms > db.get("max_bedrooms", 5):
-        logging.info(
-            f"[{prop_id}] Rejected: Bedrooms ({property_data.bedrooms}) above max required ({db.get('max_bedrooms', 5)})."
-        )
-        return False
+        reason = f"Bedrooms ({property_data.bedrooms}) above max required ({db.get('max_bedrooms', 5)})."
+        logging.info(f"[{prop_id}] Rejected: {reason}")
+        return False, reason
 
     if property_data.price_pcm > db["max_price_pcm"]:
-        logging.info(
-            f"[{prop_id}] Rejected: Price (£{property_data.price_pcm}) exceeds maximum budget (£{db['max_price_pcm']})."
-        )
-        return False
+        reason = f"Price (£{property_data.price_pcm}) exceeds maximum budget (£{db['max_price_pcm']})."
+        logging.info(f"[{prop_id}] Rejected: {reason}")
+        return False, reason
 
     if property_data.furnishing not in db.get("required_furnishing", ["unknown"]):
-        logging.info(
-            f"[{prop_id}] Rejected: Furnishing '{property_data.furnishing}' not in required list."
-        )
-        return False
+        reason = f"Furnishing '{property_data.furnishing}' not in required list."
+        logging.info(f"[{prop_id}] Rejected: {reason}")
+        return False, reason
 
-    return True
+    return True, None
 
 
 def calculate_match_score(

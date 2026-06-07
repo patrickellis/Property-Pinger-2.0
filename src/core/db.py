@@ -102,6 +102,9 @@ def mark_evaluated(property_id: str, ignored: bool = False, score: float = 0.0, 
                 'commute_mins': property_data.commute_mins,
                 'raw_data': property_data.model_dump()
             })
+            if property_data.user_note:
+                update_data['user_note'] = property_data.user_note
+            
             
         collection_ref.document(str(property_id)).set(update_data, merge=True)
         if ignored:

@@ -52,19 +52,19 @@ const NoteEditor = ({ propId, initialNote, onSave }: { propId: string, initialNo
   );
 };
 
-const getScoreColor = (score: number) => {
+const getScoreColor = (score: number, viewed: boolean = false) => {
   const clampedScore = Math.max(0, Math.min(100, score));
   // Use a quadratic curve to make it harder to reach green hues.
   // This makes 50 ~ hue 30 (orange), 70 ~ hue 58 (yellow), 100 ~ hue 120 (green).
   const normalized = clampedScore / 100;
   const hue = Math.pow(normalized, 2) * 120;
-  return `hsl(${hue}, 80%, 45%)`;
+  return `hsla(${hue}, 85%, 50%, ${viewed ? 0.4 : 1})`;
 };
 
-const createCustomIcon = (score: number, ignored: boolean, pinned: boolean = false, fresh: boolean = false) => {
-  const bgColor = ignored ? 'var(--danger)' : getScoreColor(score);
+const createCustomIcon = (score: number, ignored: boolean, pinned: boolean = false, fresh: boolean = false, viewed: boolean = false) => {
+  const bgColor = ignored ? 'var(--danger)' : getScoreColor(score, viewed);
   return L.divIcon({
-    className: `custom-marker ${ignored ? 'ignored' : ''} ${pinned ? 'pinned' : ''} ${fresh ? 'fresh' : ''}`,
+    className: `custom-marker ${ignored ? 'ignored' : ''} ${pinned ? 'pinned' : ''} ${fresh ? 'fresh' : ''} ${viewed ? 'viewed' : ''}`,
     html: `<div class="custom-marker-inner" style="background-color: ${bgColor};">${pinned ? '⭐' : Math.round(score)}</div>`,
     iconSize: [36, 36],
     iconAnchor: [18, 18],
@@ -104,6 +104,31 @@ const isFresh = (isoDateStr?: string) => {
   const diffTime = Math.abs(now.getTime() - date.getTime());
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   return diffDays <= 3;
+};
+
+const formatListedDate = (dateStr?: string) => {
+  if (!dateStr || dateStr === 'Unknown') return 'Unknown';
+  
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return dateStr;
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const listedDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  
+  const diffTime = today.getTime() - listedDay.getTime();
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) return `${dateStr} (Today)`;
+  if (diffDays === 1) return `${dateStr} (Yesterday)`;
+  if (diffDays < 0) return dateStr; // sanity check
+  
+  if (diffDays > 30) {
+    const months = Math.floor(diffDays / 30);
+    return `${dateStr} (> ${months} month${months > 1 ? 's' : ''} ago)`;
+  }
+  
+  return `${dateStr} (${diffDays} days ago)`;
 };
 
 const createPoiIcon = (type: string) => {
@@ -183,6 +208,8 @@ function App() {
   const [showPinnedPanel, setShowPinnedPanel] = useLocalStorageState('pinger_showPinnedPanel', false);
   const [maxPricePerSqft, setMaxPricePerSqft] = useLocalStorageState('pinger_maxPricePerSqft', 0);
   const [maxCommuteMins, setMaxCommuteMins] = useLocalStorageState('pinger_maxCommuteMins', 0);
+  const [showIgnored, setShowIgnored] = useLocalStorageState('pinger_showIgnored', false);
+  const [viewedProperties, setViewedProperties] = useLocalStorageState<string[]>('pinger_viewedProperties', []);
   
   // Selected Property
   const [selectedProp, setSelectedProp] = useState<Property | null>(null);
@@ -206,9 +233,13 @@ function App() {
           
           let sqft = data.sqft || data.raw_data?.sqft;
           if (!sqft) {
-            const sqftMatch = desc.match(/(\d[,.\d]*)\s*(sq\s*ft|square\s*feet|sqft)/i);
+            const sqftMatch = desc.match(/([\d,.]+)\s*(sq\s*ft|square\s*feet|sqft)/i);
+            const sqmMatch = desc.match(/([\d,.]+)\s*(sq\s*m|square\s*meters|square\s*metres|sqm|m2|m\^2|m²)/i);
             if (sqftMatch) {
               sqft = parseInt(sqftMatch[1].replace(/,/g, ''), 10);
+            } else if (sqmMatch) {
+              const sqm = parseFloat(sqmMatch[1].replace(/,/g, ''));
+              sqft = Math.round(sqm * 10.7639);
             }
           }
 
@@ -220,6 +251,22 @@ function App() {
           const reception_on_ground_floor = data.reception_on_ground_floor ?? data.raw_data?.reception_on_ground_floor;
                            
           const listing_update = normalizeToISO8601(data.listing_update || data.raw_data?.listing_update);
+          
+          let commute_mins = data.commute_mins 
+            ?? data.raw_data?.commute_mins 
+            ?? data.raw_data?.commute_metrics_raw?.average_mins;
+            
+          if (commute_mins === undefined) {
+            const commuteStr = [...(data.breakdown?.pros || []), ...(data.breakdown?.cons || [])].find(s => s.includes('Commute'));
+            if (commuteStr) {
+              const match = commuteStr.match(/(\d+)m/);
+              if (match) commute_mins = parseInt(match[1], 10);
+            }
+          }
+            
+          if (commute_mins === 999) {
+            commute_mins = undefined;
+          }
 
           if (lat && lng) {
             let pps: number | undefined;
@@ -244,7 +291,7 @@ function App() {
               user_note: data.user_note || '',
               user_status: data.user_status || 'None',
               price_per_sqft: pps,
-              commute_mins: data.commute_mins
+              commute_mins: commute_mins
             });
           }
         });
@@ -270,15 +317,20 @@ function App() {
       // Default backend weights
       const DW = { price: 15, commute: 15, natural_light: 20, period_features: 15, sash_windows: 5, garden: 10, high_ceilings: 15 };
       
-      // Scale each positive score component
-      if (sc.price !== undefined) dynamicScore += (sc.price / Math.max(1, DW.price)) * weights.price;
-      // Commute score can be negative, scaling applies the same
-      if (sc.commute !== undefined) dynamicScore += (sc.commute / Math.max(1, DW.commute)) * weights.commute;
-      if (sc.natural_light !== undefined) dynamicScore += (sc.natural_light / Math.max(1, DW.natural_light)) * weights.natural_light;
-      if (sc.period_features !== undefined) dynamicScore += DW.period_features > 0 ? (sc.period_features / DW.period_features) * weights.period_features : 0;
-      if (sc.sash_windows !== undefined) dynamicScore += DW.sash_windows > 0 ? (sc.sash_windows / DW.sash_windows) * weights.sash_windows : 0;
-      if (sc.garden !== undefined) dynamicScore += DW.garden > 0 ? (sc.garden / DW.garden) * weights.garden : 0;
-      if (sc.high_ceilings !== undefined) dynamicScore += DW.high_ceilings > 0 ? (sc.high_ceilings / DW.high_ceilings) * weights.high_ceilings : 0;
+      // Calculate total user weight to normalize the scores out of 100
+      const totalWeight = Object.values(weights).reduce((sum, w) => sum + w, 0);
+      
+      if (totalWeight > 0) {
+        // Normalize the score contributions to be out of 100 instead of unbounded
+        if (sc.price !== undefined) dynamicScore += (sc.price / Math.max(1, DW.price)) * (weights.price / totalWeight) * 100;
+        // Commute score can be negative, scaling applies the same
+        if (sc.commute !== undefined) dynamicScore += (sc.commute / Math.max(1, DW.commute)) * (weights.commute / totalWeight) * 100;
+        if (sc.natural_light !== undefined) dynamicScore += (sc.natural_light / Math.max(1, DW.natural_light)) * (weights.natural_light / totalWeight) * 100;
+        if (sc.period_features !== undefined) dynamicScore += DW.period_features > 0 ? (sc.period_features / DW.period_features) * (weights.period_features / totalWeight) * 100 : 0;
+        if (sc.sash_windows !== undefined) dynamicScore += DW.sash_windows > 0 ? (sc.sash_windows / DW.sash_windows) * (weights.sash_windows / totalWeight) * 100 : 0;
+        if (sc.garden !== undefined) dynamicScore += DW.garden > 0 ? (sc.garden / DW.garden) * (weights.garden / totalWeight) * 100 : 0;
+        if (sc.high_ceilings !== undefined) dynamicScore += DW.high_ceilings > 0 ? (sc.high_ceilings / DW.high_ceilings) * (weights.high_ceilings / totalWeight) * 100 : 0;
+      }
       
       // Add all penalties directly (they start with 'penalty_')
       Object.keys(sc).forEach(k => {
@@ -295,7 +347,10 @@ function App() {
 
   const filteredProperties = useMemo(() => {
     return scoredProperties.filter(p => {
-      if (p.ignored && typeof p.score !== 'number') return false; // Hide hard dealbreaker failures
+      if (p.ignored) {
+        return showIgnored; // Bypass all other filters if we explicitly want to see ignored properties
+      }
+
       if (typeof p.score === 'number' && p.score < minScore) return false;
       if (p.price_pcm && (p.price_pcm < priceRange[0] || p.price_pcm > priceRange[1])) return false;
       if (p.bedrooms && p.bedrooms < minBeds) return false;
@@ -304,7 +359,9 @@ function App() {
       if (requireLift && !p.has_lift && !p.reception_on_ground_floor) return false;
       if (disabledTypes.includes(p.property_type || 'Unknown')) return false;
       if (maxPricePerSqft > 0 && p.price_per_sqft && p.price_per_sqft > maxPricePerSqft) return false;
-      if (maxCommuteMins > 0 && p.commute_mins && p.commute_mins > maxCommuteMins) return false;
+      if (maxCommuteMins > 0) {
+        if (p.commute_mins !== undefined && p.commute_mins > maxCommuteMins) return false;
+      }
 
       if (keywordFilter.trim() !== '') {
         const query = keywordFilter.toLowerCase();
@@ -318,7 +375,7 @@ function App() {
 
       return true;
     });
-  }, [scoredProperties, minScore, priceRange, minBeds, minSqft, requireGarden, requireLift, disabledTypes, keywordFilter, maxPricePerSqft, maxCommuteMins]);
+  }, [scoredProperties, minScore, priceRange, minBeds, minSqft, requireGarden, requireLift, disabledTypes, keywordFilter, maxPricePerSqft, maxCommuteMins, showIgnored]);
 
   const uniqueTypes = useMemo(() => {
     return Array.from(new Set(properties.map(p => p.property_type || 'Unknown'))).sort();
@@ -531,8 +588,12 @@ function App() {
             <div className={`toggle-switch ${requireLift ? 'active' : ''}`}></div>
             <label style={{ margin: 0, cursor: 'pointer' }}>Require Lift</label>
           </div>
-          
 
+          <div className="toggle-group" onClick={() => setShowIgnored(!showIgnored)}>
+            <div className={`toggle-switch ${showIgnored ? 'active' : ''}`}></div>
+            <label style={{ margin: 0, cursor: 'pointer' }}>Show Ignored Properties</label>
+          </div>
+          
         </div>
         
         <div style={{ marginTop: 'auto', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
@@ -639,11 +700,17 @@ function App() {
               <Marker 
                 key={p.id} 
                 position={[p.latitude!, p.longitude!]}
-                icon={createCustomIcon(p.score || 0, p.ignored, p.pinned || false, isFresh(p.listing_update))}
-                zIndexOffset={Math.round((p.score || 0) * 1000) + (p.pinned ? 100000 : 0)}
+                icon={createCustomIcon(p.score || 0, p.ignored, p.pinned || false, isFresh(p.listing_update), viewedProperties.includes(p.id))}
+                zIndexOffset={Math.round((p.score || 0) * 1000) + (p.pinned ? 100000 : 0) - (viewedProperties.includes(p.id) ? 500 : 0)}
                 riseOnHover={true}
                 eventHandlers={{
-                  click: () => { setSelectedProp(p); setCurrentImageIndex(0); },
+                  click: () => { 
+                    setSelectedProp(p); 
+                    setCurrentImageIndex(0); 
+                    if (!viewedProperties.includes(p.id)) {
+                      setViewedProperties([...viewedProperties, p.id]);
+                    }
+                  },
                 }}
               />
             ))}
@@ -742,11 +809,27 @@ function App() {
                   <span className="metric-label">£/sqft</span>
                   <span className="metric-value">{selectedProp.price_per_sqft ? `£${selectedProp.price_per_sqft}` : 'N/A'}</span>
                 </div>
-                <div className="metric-card">
+                <div className="metric-card" style={{ gridColumn: '1 / -1' }}>
                   <span className="metric-label">Listed</span>
-                  <span className="metric-value">{selectedProp.listing_update || 'Unknown'}</span>
+                  <span className="metric-value">{formatListedDate(selectedProp.listing_update)}</span>
                 </div>
               </div>
+
+              {selectedProp.breakdown?.scorecard && (
+                <div className="workflow-section" style={{ padding: '12px 16px', marginBottom: '24px' }}>
+                  <label style={{ marginBottom: '12px', display: 'block', fontSize: '0.95rem' }}>Score Breakdown</label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {Object.entries(selectedProp.breakdown.scorecard).map(([key, value]) => (
+                      <div key={key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                        <span style={{ textTransform: 'capitalize', color: 'var(--text-secondary)' }}>{key.replace(/_/g, ' ')}</span>
+                        <span style={{ fontWeight: 600, color: value > 0 ? 'var(--success)' : (value < 0 ? 'var(--danger)' : 'var(--text-primary)') }}>
+                          {value > 0 ? '+' : ''}{value} pts
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               
               <div className="workflow-section">
                 <label>Status</label>

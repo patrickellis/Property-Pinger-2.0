@@ -78,9 +78,20 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         if not property_data:
             return
         save_scraped_data(property_id, property_data)
+        
+    # Copy over user_note from cache if it exists so we don't wipe it out
+    if doc_data.get("user_note"):
+        property_data.user_note = doc_data.get("user_note")
 
     # 2. Hard Filters (Zero/Low Cost)
-    if not passes_dealbreakers(property_data, config):
+    passed, reason = passes_dealbreakers(property_data, config)
+    if not passed:
+        existing_note = doc_data.get("user_note", "")
+        if not existing_note:
+            property_data.user_note = f"Auto-Ignored: {reason}"
+        else:
+            property_data.user_note = existing_note
+            
         mark_evaluated(property_id, ignored=True, property_data=property_data)
         return
 
