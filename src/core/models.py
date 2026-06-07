@@ -1,24 +1,25 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
+import math
 
 class PropertyListing(BaseModel):
     id: str
     url: str
     status: Dict[str, Any] = Field(default_factory=dict)
     price_pcm: int
-    bedrooms: int
-    bathrooms: int
-    property_type: str
-    display_address: str
-    postcode: str
-    uk_country: str
+    bedrooms: int = 0
+    bathrooms: int = 0
+    property_type: Optional[str] = None
+    display_address: Optional[str] = None
+    postcode: Optional[str] = None
+    uk_country: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     nearest_stations: List[Dict[str, Any]] = Field(default_factory=list)
-    has_garden: bool
-    description: str
-    furnishing: str
-    listing_update: str
+    has_garden: Optional[bool] = None
+    description: Optional[str] = None
+    furnishing: Optional[str] = None
+    listing_update: Optional[str] = None
     images: List[str] = Field(default_factory=list)
     floorplans: List[str] = Field(default_factory=list)
 
@@ -62,3 +63,24 @@ class PropertyListing(BaseModel):
                 return int(clean_val)
         # Fallback for "POA" or unknown prices to avoid crashing but ensure it gets filtered out
         return 999999
+
+    @field_validator("commute_mins", mode="before")
+    @classmethod
+    def parse_commute_mins(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, (int, float)):
+            return math.ceil(value)
+        if isinstance(value, str):
+            try:
+                return math.ceil(float(value))
+            except ValueError:
+                return None
+        return value
+
+    @field_validator("bedrooms", "bathrooms", mode="before")
+    @classmethod
+    def parse_rooms(cls, value):
+        if value is None:
+            return 0
+        return value
