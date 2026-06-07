@@ -39,19 +39,23 @@ def fetch_search_results(base_search_url: str, api_key: str, max_pages: int = 10
 
         soup = BeautifulSoup(response.text, 'html.parser')
         new_urls_found = 0
+        page_urls = set()
         
         for link in soup.find_all('a', class_='propertyCard-link'):
             href = link.get('href')
             if href and 'properties' in href:
                 clean_url = urljoin("https://www.rightmove.co.uk", href).split('#')[0].split('?')[0] 
-                if clean_url not in all_property_urls:
-                    all_property_urls.append(clean_url)
-                    new_urls_found += 1
+                page_urls.add(clean_url)
+
+        for clean_url in page_urls:
+            if clean_url not in all_property_urls:
+                all_property_urls.append(clean_url)
+                new_urls_found += 1
                     
-        logging.info(f"Page {page + 1}: Extracted {new_urls_found} new properties.")
+        logging.info(f"Page {page + 1}: Extracted {new_urls_found} new properties (out of {len(page_urls)} on page).")
         
         # If Rightmove returns fewer than 24 properties on a page, it's the last page
-        if new_urls_found < 24:
+        if len(page_urls) < 24:
             logging.info("Reached the end of the search results.")
             break
             
