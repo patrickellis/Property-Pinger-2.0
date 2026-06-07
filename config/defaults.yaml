@@ -1,6 +1,9 @@
 # Maximum number of pages to paginate through per search URL.
 max_search_pages: 40
 
+# Limit on the number of unseen properties fetched per job execution.
+max_unseen_properties: 1000
+
 # Minimum final match score out of 100 required to send a Telegram alert.
 alert_threshold: 70
 
