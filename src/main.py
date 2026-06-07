@@ -5,7 +5,7 @@ import yaml
 
 import re
 from datetime import datetime, timezone
-from core.db import get_property_cache, save_scraped_data, mark_evaluated, get_config_mtime
+from core.db import get_property_cache, save_scraped_data, mark_evaluated, get_config_mtime, get_all_known_property_ids
 from evaluators.scoring import calculate_match_score, passes_dealbreakers
 from evaluators.vision import evaluate_property_images, extract_floorplan_details, PropertyVisuals
 from scrapers.listing import extract_rightmove_data_via_api
@@ -241,11 +241,21 @@ def run_pipeline():
 
     config_mtime = get_config_mtime()
     ignore_threshold = config.get("ignore_threshold", 50)
+    max_unseen_properties = config.get("max_unseen_properties", 50)
+
+    logging.info("Fetching known property IDs from database...")
+    known_property_ids = get_all_known_property_ids()
+    logging.info(f"Loaded {len(known_property_ids)} known properties.")
 
     all_urls = []
     for search_url in config["search_urls"]:
         logging.info(f"Processing search batch: {search_url}")
-        listing_urls = fetch_search_results(search_url, scraper_key, max_pages=config.get("max_search_pages", 20))
+        listing_urls = fetch_search_results(
+            search_url, 
+            scraper_key, 
+            known_property_ids=known_property_ids,
+            max_unseen_properties=max_unseen_properties
+        )
         all_urls.extend(listing_urls)
         
     all_urls = list(set(all_urls))

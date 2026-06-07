@@ -14,6 +14,21 @@ except Exception as e:
     db = None
     collection_ref = None
 
+def get_all_known_property_ids() -> set[str]:
+    """
+    Fetches all known property IDs from Firestore using a keys-only query.
+    Returns a set of string IDs.
+    """
+    if not db:
+        return set()
+    try:
+        # A keys-only query is much faster and cheaper than fetching documents
+        return {doc.id for doc in collection_ref.select([]).stream()}
+    except GoogleAPIError as e:
+        logging.error(f"Failed to fetch known property IDs: {e}")
+        return set()
+
+
 def get_config_mtime() -> datetime:
     """
     Reads the modification time of config files and returns the newest timezone-aware UTC datetime.

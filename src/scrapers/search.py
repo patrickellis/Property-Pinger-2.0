@@ -1,18 +1,22 @@
 import requests
+import re
 from bs4 import BeautifulSoup
 from urllib.parse import quote, urljoin, urlparse, urlencode, parse_qsl, urlunparse
 import logging
 from tenacity import retry, wait_exponential, stop_after_attempt
 
 @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
-def fetch_search_results(base_search_url: str, api_key: str, max_pages: int = 10) -> list[str]:
+def fetch_search_results(base_search_url: str, api_key: str, known_property_ids: set[str] = None, max_unseen_properties: int = 50) -> list[str]:
     """
-    Paginates through Rightmove search results up to `max_pages`.
-    (10 pages = 240 properties per search area).
+    Paginates through Rightmove search results until it finds `max_unseen_properties` 
+    that are not already in the database (or hits Rightmove's 42 page limit).
     """
     all_property_urls = []
+    unseen_count = 0
+    known_property_ids = known_property_ids or set()
     
-    for page in range(max_pages):
+    # Rightmove caps results at 1000 properties (42 pages)
+    for page in range(42):
         index = page * 24
         parsed = urlparse(base_search_url)
 
@@ -51,8 +55,17 @@ def fetch_search_results(base_search_url: str, api_key: str, max_pages: int = 10
             if clean_url not in all_property_urls:
                 all_property_urls.append(clean_url)
                 new_urls_found += 1
+                
+                # Check if this property is unseen
+                match = re.search(r'/properties/(\d+)', clean_url)
+                if match and match.group(1) not in known_property_ids:
+                    unseen_count += 1
                     
-        logging.info(f"Page {page + 1}: Extracted {new_urls_found} new properties (out of {len(page_urls)} on page).")
+        logging.info(f"Page {page + 1}: Extracted {new_urls_found} new properties ({unseen_count}/{max_unseen_properties} unseen quota met).")
+        
+        if unseen_count >= max_unseen_properties:
+            logging.info(f"Reached unseen properties quota ({max_unseen_properties}). Stopping pagination.")
+            break
         
         # If Rightmove returns fewer than 24 properties on a page, it's the last page
         if len(page_urls) < 24:
