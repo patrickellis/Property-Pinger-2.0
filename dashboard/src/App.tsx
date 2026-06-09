@@ -20,6 +20,8 @@ interface Property {
   sqft?: number;
   has_garden?: boolean;
   has_lift?: boolean;
+  has_ac?: boolean;
+  has_underfloor_heating?: boolean;
   reception_on_ground_floor?: boolean;
   description?: string;
   listing_update?: string;
