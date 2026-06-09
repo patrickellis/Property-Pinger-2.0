@@ -206,7 +206,7 @@ function App() {
   const [requireGarden, setRequireGarden] = useLocalStorageState('pinger_requireGarden', false);
   const [requireLift, setRequireLift] = useLocalStorageState('pinger_requireLift', false);
   const [requireAC, setRequireAC] = useLocalStorageState('pinger_requireAC', false);
-  const [requireUnderfloorHeating, setRequireUnderfloorHeating] = useLocalStorageState('pinger_requireUnderfloorHeating', false);
+  const [excludeUnderfloorHeating, setExcludeUnderfloorHeating] = useLocalStorageState('pinger_excludeUnderfloorHeating', false);
   const [disabledTypes, setDisabledTypes] = useLocalStorageState<string[]>('pinger_disabledTypes', []);
   const [keywordFilter, setKeywordFilter] = useLocalStorageState('pinger_keywordFilter', '');
   const [showPinnedPanel, setShowPinnedPanel] = useLocalStorageState('pinger_showPinnedPanel', false);
@@ -254,10 +254,10 @@ function App() {
                            desc.toLowerCase().includes('elevator');
                            
           const has_ac = data.has_ac ?? data.raw_data?.has_ac ?? 
-                         desc.toLowerCase().match(/\b(air conditioning|a\/c|ac|climate control|air-con|aircon)\b/) !== null;
+                         desc.toLowerCase().match(/\b(air conditioning|air-conditioning|a\/c|ac|climate control|air-con|aircon)\b/) !== null;
                          
           const has_underfloor_heating = data.has_underfloor_heating ?? data.raw_data?.has_underfloor_heating ?? 
-                         desc.toLowerCase().match(/\b(underfloor heating|under floor heating|under-floor heating)\b/) !== null;
+                         desc.toLowerCase().match(/\b(underfloor heating|under floor heating|under-floor heating|ufh|underfloor|radiant floor|heated floor)\b/) !== null;
                            
           const reception_on_ground_floor = data.reception_on_ground_floor ?? data.raw_data?.reception_on_ground_floor;
                            
@@ -371,7 +371,7 @@ function App() {
       if (requireGarden && !p.has_garden) return false;
       if (requireLift && !p.has_lift && !p.reception_on_ground_floor) return false;
       if (requireAC && !p.has_ac) return false;
-      if (requireUnderfloorHeating && !p.has_underfloor_heating) return false;
+      if (excludeUnderfloorHeating && p.has_underfloor_heating) return false;
       if (disabledTypes.includes(p.property_type || 'Unknown')) return false;
       if (maxPricePerSqft > 0 && p.price_per_sqft && p.price_per_sqft > maxPricePerSqft) return false;
       if (maxCommuteMins > 0) {
@@ -400,7 +400,7 @@ function App() {
 
       return true;
     });
-  }, [scoredProperties, minScore, priceRange, minBeds, minSqft, requireGarden, requireLift, requireAC, requireUnderfloorHeating, disabledTypes, keywordFilter, maxPricePerSqft, maxCommuteMins, addedInLast, showIgnored]);
+  }, [scoredProperties, minScore, priceRange, minBeds, minSqft, requireGarden, requireLift, requireAC, excludeUnderfloorHeating, disabledTypes, keywordFilter, maxPricePerSqft, maxCommuteMins, addedInLast, showIgnored]);
 
   const uniqueTypes = useMemo(() => {
     return Array.from(new Set(properties.map(p => p.property_type || 'Unknown'))).sort();
@@ -635,9 +635,9 @@ function App() {
             <label style={{ margin: 0, cursor: 'pointer' }}>Require Air Conditioning</label>
           </div>
 
-          <div className="toggle-group" onClick={() => setRequireUnderfloorHeating(!requireUnderfloorHeating)}>
-            <div className={`toggle-switch ${requireUnderfloorHeating ? 'active' : ''}`}></div>
-            <label style={{ margin: 0, cursor: 'pointer' }}>Require Underfloor Heating</label>
+          <div className="toggle-group" onClick={() => setExcludeUnderfloorHeating(!excludeUnderfloorHeating)}>
+            <div className={`toggle-switch ${excludeUnderfloorHeating ? 'active' : ''}`}></div>
+            <label style={{ margin: 0, cursor: 'pointer' }}>Exclude Underfloor Heating</label>
           </div>
 
           <div className="toggle-group" onClick={() => setShowIgnored(!showIgnored)}>

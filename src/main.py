@@ -136,8 +136,8 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         
         property_data.master_bedroom_length_m = floorplan_details.master_bedroom_length_m
         
-        property_data.has_ac = bool(re.search(r'\b(air conditioning|a/c|ac|climate control|air-con|aircon)\b', property_data.description, re.IGNORECASE))
-        property_data.has_underfloor_heating = bool(re.search(r'\b(underfloor heating|under floor heating|under-floor heating)\b', property_data.description, re.IGNORECASE))
+        property_data.has_ac = bool(re.search(r'\b(air conditioning|air-conditioning|a/c|ac|climate control|air-con|aircon)\b', property_data.description, re.IGNORECASE))
+        property_data.has_underfloor_heating = bool(re.search(r'\b(underfloor heating|under floor heating|under-floor heating|ufh|underfloor|radiant floor|heated floor)\b', property_data.description, re.IGNORECASE))
     else:
         logging.info(f"[{property_id}] Skipping Gemini Floorplan (cache hit)")
         property_data.sqft = old_raw.sqft
