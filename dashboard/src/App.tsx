@@ -203,11 +203,14 @@ function App() {
   const [minSqft, setMinSqft] = useLocalStorageState('pinger_minSqft', 0);
   const [requireGarden, setRequireGarden] = useLocalStorageState('pinger_requireGarden', false);
   const [requireLift, setRequireLift] = useLocalStorageState('pinger_requireLift', false);
+  const [requireAC, setRequireAC] = useLocalStorageState('pinger_requireAC', false);
+  const [requireUnderfloorHeating, setRequireUnderfloorHeating] = useLocalStorageState('pinger_requireUnderfloorHeating', false);
   const [disabledTypes, setDisabledTypes] = useLocalStorageState<string[]>('pinger_disabledTypes', []);
   const [keywordFilter, setKeywordFilter] = useLocalStorageState('pinger_keywordFilter', '');
   const [showPinnedPanel, setShowPinnedPanel] = useLocalStorageState('pinger_showPinnedPanel', false);
   const [maxPricePerSqft, setMaxPricePerSqft] = useLocalStorageState('pinger_maxPricePerSqft', 0);
   const [maxCommuteMins, setMaxCommuteMins] = useLocalStorageState('pinger_maxCommuteMins', 0);
+  const [addedInLast, setAddedInLast] = useLocalStorageState('pinger_addedInLast', 0);
   const [showIgnored, setShowIgnored] = useLocalStorageState('pinger_showIgnored', false);
   const [viewedProperties, setViewedProperties] = useLocalStorageState<string[]>('pinger_viewedProperties', []);
   
@@ -248,6 +251,12 @@ function App() {
                            desc.toLowerCase().includes('lift') || 
                            desc.toLowerCase().includes('elevator');
                            
+          const has_ac = data.has_ac ?? data.raw_data?.has_ac ?? 
+                         desc.toLowerCase().match(/\b(air conditioning|a\/c|ac|climate control|air-con|aircon)\b/) !== null;
+                         
+          const has_underfloor_heating = data.has_underfloor_heating ?? data.raw_data?.has_underfloor_heating ?? 
+                         desc.toLowerCase().match(/\b(underfloor heating|under floor heating|under-floor heating)\b/) !== null;
+                           
           const reception_on_ground_floor = data.reception_on_ground_floor ?? data.raw_data?.reception_on_ground_floor;
                            
           const listing_update = normalizeToISO8601(data.listing_update || data.raw_data?.listing_update);
@@ -285,6 +294,8 @@ function App() {
               sqft: sqft,
               has_garden: has_garden,
               has_lift: has_lift,
+              has_ac: has_ac,
+              has_underfloor_heating: has_underfloor_heating,
               reception_on_ground_floor: reception_on_ground_floor,
               listing_update: listing_update,
               pinned: data.pinned || false,
@@ -357,10 +368,22 @@ function App() {
       if (minSqft > 0 && p.sqft && p.sqft < minSqft) return false;
       if (requireGarden && !p.has_garden) return false;
       if (requireLift && !p.has_lift && !p.reception_on_ground_floor) return false;
+      if (requireAC && !p.has_ac) return false;
+      if (requireUnderfloorHeating && !p.has_underfloor_heating) return false;
       if (disabledTypes.includes(p.property_type || 'Unknown')) return false;
       if (maxPricePerSqft > 0 && p.price_per_sqft && p.price_per_sqft > maxPricePerSqft) return false;
       if (maxCommuteMins > 0) {
         if (p.commute_mins !== undefined && p.commute_mins > maxCommuteMins) return false;
+      }
+
+      if (addedInLast > 0) {
+        if (!p.listing_update) return false;
+        const date = new Date(p.listing_update);
+        if (isNaN(date.getTime())) return false;
+        const now = new Date();
+        const diffTime = Math.abs(now.getTime() - date.getTime());
+        const diffDays = diffTime / (1000 * 60 * 60 * 24);
+        if (diffDays > addedInLast) return false;
       }
 
       if (keywordFilter.trim() !== '') {
@@ -375,7 +398,7 @@ function App() {
 
       return true;
     });
-  }, [scoredProperties, minScore, priceRange, minBeds, minSqft, requireGarden, requireLift, disabledTypes, keywordFilter, maxPricePerSqft, maxCommuteMins, showIgnored]);
+  }, [scoredProperties, minScore, priceRange, minBeds, minSqft, requireGarden, requireLift, requireAC, requireUnderfloorHeating, disabledTypes, keywordFilter, maxPricePerSqft, maxCommuteMins, addedInLast, showIgnored]);
 
   const uniqueTypes = useMemo(() => {
     return Array.from(new Set(properties.map(p => p.property_type || 'Unknown'))).sort();
@@ -557,6 +580,22 @@ function App() {
           </div>
 
           <div className="filter-group">
+            <label>Added in the last</label>
+            <select 
+              value={addedInLast} 
+              onChange={e => setAddedInLast(Number(e.target.value))}
+              className="search-input"
+              style={{ marginTop: '8px', paddingLeft: '12px', cursor: 'pointer' }}
+            >
+              <option value={0}>Anytime</option>
+              <option value={1}>24 hours</option>
+              <option value={3}>3 days</option>
+              <option value={7}>7 days</option>
+              <option value={30}>1 month</option>
+            </select>
+          </div>
+
+          <div className="filter-group">
             <label>Property Type</label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
               {uniqueTypes.map(type => (
@@ -587,6 +626,16 @@ function App() {
           <div className="toggle-group" onClick={() => setRequireLift(!requireLift)}>
             <div className={`toggle-switch ${requireLift ? 'active' : ''}`}></div>
             <label style={{ margin: 0, cursor: 'pointer' }}>Require Lift</label>
+          </div>
+
+          <div className="toggle-group" onClick={() => setRequireAC(!requireAC)}>
+            <div className={`toggle-switch ${requireAC ? 'active' : ''}`}></div>
+            <label style={{ margin: 0, cursor: 'pointer' }}>Require Air Conditioning</label>
+          </div>
+
+          <div className="toggle-group" onClick={() => setRequireUnderfloorHeating(!requireUnderfloorHeating)}>
+            <div className={`toggle-switch ${requireUnderfloorHeating ? 'active' : ''}`}></div>
+            <label style={{ margin: 0, cursor: 'pointer' }}>Require Underfloor Heating</label>
           </div>
 
           <div className="toggle-group" onClick={() => setShowIgnored(!showIgnored)}>
@@ -696,7 +745,7 @@ function App() {
               url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
             />
-            {filteredProperties.map(p => (
+            {filteredProperties.filter(p => showPinnedPanel ? p.pinned : true).map(p => (
               <Marker 
                 key={p.id} 
                 position={[p.latitude!, p.longitude!]}

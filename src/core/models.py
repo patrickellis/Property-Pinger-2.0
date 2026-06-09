@@ -22,6 +22,7 @@ class PropertyListing(BaseModel):
     listing_update: Optional[str] = None
     images: List[str] = Field(default_factory=list)
     floorplans: List[str] = Field(default_factory=list)
+    user_note: Optional[str] = None
 
     # Fields populated during evaluation
     sqft: Optional[int] = None
@@ -33,6 +34,8 @@ class PropertyListing(BaseModel):
     master_bedroom_length_m: Optional[float] = None
     is_noisy_location: Optional[bool] = None
     commute_mins: Optional[int] = None
+    has_ac: Optional[bool] = None
+    has_underfloor_heating: Optional[bool] = None
     
     # Gemini Vision Fields
     natural_light_score: Optional[int] = None

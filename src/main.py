@@ -135,6 +135,9 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         property_data.has_lift = floorplan_details.has_lift or has_lift_from_desc
         
         property_data.master_bedroom_length_m = floorplan_details.master_bedroom_length_m
+        
+        property_data.has_ac = bool(re.search(r'\b(air conditioning|a/c|ac|climate control|air-con|aircon)\b', property_data.description, re.IGNORECASE))
+        property_data.has_underfloor_heating = bool(re.search(r'\b(underfloor heating|under floor heating|under-floor heating)\b', property_data.description, re.IGNORECASE))
     else:
         logging.info(f"[{property_id}] Skipping Gemini Floorplan (cache hit)")
         property_data.sqft = old_raw.sqft
@@ -144,6 +147,8 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         property_data.floor_level = old_raw.floor_level
         property_data.has_lift = old_raw.has_lift
         property_data.master_bedroom_length_m = old_raw.master_bedroom_length_m
+        property_data.has_ac = getattr(old_raw, 'has_ac', None)
+        property_data.has_underfloor_heating = getattr(old_raw, 'has_underfloor_heating', None)
 
     # 5. Heavy Evaluation (Visuals)
     if images_changed or not old_raw or old_raw.natural_light_score is None:
