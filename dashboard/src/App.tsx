@@ -200,6 +200,18 @@ function App() {
     high_ceilings: 15
   });
 
+  const [scoringParams, setScoringParams] = useLocalStorageState('pinger_scoringParams', {
+    optimal_total_sqft: 1500,
+    bedroom_optimal_area_sqm: 16.0,
+    bedroom_min_width_m: 0.0,
+    bedroom_min_length_m: 0.0,
+    reception_min_width_m: 0.0,
+    reception_min_length_m: 2.14,
+    high_ceiling_threshold_m: 2.7,
+    high_ceiling_max_scale_m: 3.3
+  });
+  const [showScoringParamsPanel, setShowScoringParamsPanel] = useLocalStorageState('pinger_showScoringParamsPanel', false);
+
   // Filters
   const [minScore, setMinScore] = useLocalStorageState('pinger_minScore', 50);
   const [priceRange, setPriceRange] = useLocalStorageState<number[]>('pinger_priceRange', [0, 99999]);
@@ -333,34 +345,93 @@ function App() {
       const DW = { price: 15, commute: 15, total_size: 10, bedroom_size: 10, natural_light: 20, period_features: 15, sash_windows: 5, garden: 10, high_ceilings: 15 };
       
       // Calculate total user weight to normalize the scores out of 100
-      const totalWeight = Object.values(weights).reduce((sum, w) => sum + w, 0);
+      const safeWeights = {
+        price: weights.price ?? DW.price,
+        commute: weights.commute ?? DW.commute,
+        total_size: weights.total_size ?? DW.total_size,
+        bedroom_size: weights.bedroom_size ?? DW.bedroom_size,
+        natural_light: weights.natural_light ?? DW.natural_light,
+        period_features: weights.period_features ?? DW.period_features,
+        sash_windows: weights.sash_windows ?? DW.sash_windows,
+        garden: weights.garden ?? DW.garden,
+        high_ceilings: weights.high_ceilings ?? DW.high_ceilings
+      };
+      const totalWeight = Object.values(safeWeights).reduce((sum, w) => sum + w, 0);
       
       if (totalWeight > 0) {
+        // --- Dynamic Score Components Based on Scoring Parameters ---
+        let sc_total_size = 0;
+        if ((p.sqft || 0) > 0) {
+          const size_ratio = Math.min(1.0, p.sqft! / scoringParams.optimal_total_sqft);
+          sc_total_size = DW.total_size * size_ratio;
+        }
+
+        let sc_bed_score = 0;
+        const bedroom_length = p.raw_data?.master_bedroom_length_m || 0.0;
+        const bedroom_width = p.raw_data?.master_bedroom_width_m || 0.0;
+        if (bedroom_length > 0) {
+          if (bedroom_width > 0) {
+             if (bedroom_length >= scoringParams.bedroom_min_length_m && bedroom_width >= scoringParams.bedroom_min_width_m) {
+                 const area = bedroom_length * bedroom_width;
+                 const bed_ratio = Math.min(1.0, area / scoringParams.bedroom_optimal_area_sqm);
+                 sc_bed_score = DW.bedroom_size * bed_ratio;
+             }
+          } else {
+             // Legacy
+             sc_bed_score = DW.bedroom_size * Math.min(1.0, bedroom_length / 4.0);
+          }
+        }
+        
+        let sc_high_ceilings = 0;
+        const ceiling_height = p.raw_data?.max_ceiling_height_m || 0.0;
+        if (ceiling_height > scoringParams.high_ceiling_threshold_m) {
+            const scale_range = scoringParams.high_ceiling_max_scale_m - scoringParams.high_ceiling_threshold_m;
+            const ratio = scale_range > 0 ? Math.min(1.0, (ceiling_height - scoringParams.high_ceiling_threshold_m) / scale_range) : 1.0;
+            sc_high_ceilings = DW.high_ceilings * ratio;
+        }
+
         // Normalize the score contributions to be out of 100 instead of unbounded
-        if (sc.price !== undefined) dynamicScore += (sc.price / Math.max(1, DW.price)) * (weights.price / totalWeight) * 100;
+        if (sc.price !== undefined) dynamicScore += (sc.price / Math.max(1, DW.price)) * (safeWeights.price / totalWeight) * 100;
         // Commute score can be negative, scaling applies the same
-        if (sc.commute !== undefined) dynamicScore += (sc.commute / Math.max(1, DW.commute)) * (weights.commute / totalWeight) * 100;
-        if (sc.total_size !== undefined) dynamicScore += DW.total_size > 0 ? (sc.total_size / DW.total_size) * (weights.total_size / totalWeight) * 100 : 0;
-        if (sc.bedroom_size !== undefined) dynamicScore += DW.bedroom_size > 0 ? (sc.bedroom_size / DW.bedroom_size) * (weights.bedroom_size / totalWeight) * 100 : 0;
-        if (sc.natural_light !== undefined) dynamicScore += (sc.natural_light / Math.max(1, DW.natural_light)) * (weights.natural_light / totalWeight) * 100;
-        if (sc.period_features !== undefined) dynamicScore += DW.period_features > 0 ? (sc.period_features / DW.period_features) * (weights.period_features / totalWeight) * 100 : 0;
-        if (sc.sash_windows !== undefined) dynamicScore += DW.sash_windows > 0 ? (sc.sash_windows / DW.sash_windows) * (weights.sash_windows / totalWeight) * 100 : 0;
-        if (sc.garden !== undefined) dynamicScore += DW.garden > 0 ? (sc.garden / DW.garden) * (weights.garden / totalWeight) * 100 : 0;
-        if (sc.high_ceilings !== undefined) dynamicScore += DW.high_ceilings > 0 ? (sc.high_ceilings / DW.high_ceilings) * (weights.high_ceilings / totalWeight) * 100 : 0;
+        if (sc.commute !== undefined) dynamicScore += (sc.commute / Math.max(1, DW.commute)) * (safeWeights.commute / totalWeight) * 100;
+        
+        dynamicScore += DW.total_size > 0 ? (sc_total_size / DW.total_size) * (safeWeights.total_size / totalWeight) * 100 : 0;
+        dynamicScore += DW.bedroom_size > 0 ? (sc_bed_score / DW.bedroom_size) * (safeWeights.bedroom_size / totalWeight) * 100 : 0;
+        dynamicScore += DW.high_ceilings > 0 ? (sc_high_ceilings / DW.high_ceilings) * (safeWeights.high_ceilings / totalWeight) * 100 : 0;
+
+        if (sc.natural_light !== undefined) dynamicScore += (sc.natural_light / Math.max(1, DW.natural_light)) * (safeWeights.natural_light / totalWeight) * 100;
+        if (sc.period_features !== undefined) dynamicScore += DW.period_features > 0 ? (sc.period_features / DW.period_features) * (safeWeights.period_features / totalWeight) * 100 : 0;
+        if (sc.sash_windows !== undefined) dynamicScore += DW.sash_windows > 0 ? (sc.sash_windows / DW.sash_windows) * (safeWeights.sash_windows / totalWeight) * 100 : 0;
+        if (sc.garden !== undefined) dynamicScore += DW.garden > 0 ? (sc.garden / DW.garden) * (safeWeights.garden / totalWeight) * 100 : 0;
       }
       
-      // Add all penalties directly (they start with 'penalty_')
+      // Add all penalties directly, skipping small_reception since we re-evaluate it
       Object.keys(sc).forEach(k => {
-        if (k.startsWith('penalty_')) {
+        if (k.startsWith('penalty_') && k !== 'penalty_small_reception') {
           dynamicScore += sc[k];
         }
       });
+      
+      // Evaluate Reception penalty dynamically
+      const reception_len = p.raw_data?.reception_length_m || 0.0;
+      const reception_wid = p.raw_data?.reception_width_m || 0.0;
+      if (reception_len > 0) {
+          if (reception_wid > 0) {
+              if (reception_len < scoringParams.reception_min_length_m || reception_wid < scoringParams.reception_min_width_m) {
+                 dynamicScore -= 20; // Default penalty
+              }
+          } else {
+             if (reception_len < scoringParams.reception_min_length_m) {
+                 dynamicScore -= 20;
+             }
+          }
+      }
       
       // Ensure score doesn't go below 0 or above 100 for display
       const finalScore = Math.max(0, Math.min(100, Math.round(dynamicScore * 10) / 10));
       return { ...p, score: finalScore };
     });
-  }, [properties, weights]);
+  }, [properties, weights, scoringParams]);
 
   const filteredProperties = useMemo(() => {
     return scoredProperties.filter(p => {
@@ -514,6 +585,75 @@ function App() {
                     />
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+
+          <div className="filter-group">
+            <div style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer', marginBottom: showScoringParamsPanel ? '16px' : '0' }} onClick={() => setShowScoringParamsPanel(!showScoringParamsPanel)}>
+              <label style={{ cursor: 'pointer', margin: 0 }}>📏 Scoring Parameters</label>
+              <span>{showScoringParamsPanel ? '▼' : '▶'}</span>
+            </div>
+            
+            {showScoringParamsPanel && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '12px', backgroundColor: 'var(--surface-light)', borderRadius: '8px' }}>
+                
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                    <span>Optimal Total Sqft</span>
+                    <span>{scoringParams.optimal_total_sqft} sqft</span>
+                  </div>
+                  <input type="range" min="500" max="3000" step="50" value={scoringParams.optimal_total_sqft} onChange={e => setScoringParams({...scoringParams, optimal_total_sqft: Number(e.target.value)})} style={{ width: '100%' }} />
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                    <span>Optimal Bedroom Area</span>
+                    <span>{scoringParams.bedroom_optimal_area_sqm} sqm</span>
+                  </div>
+                  <input type="range" min="8" max="30" step="1" value={scoringParams.bedroom_optimal_area_sqm} onChange={e => setScoringParams({...scoringParams, bedroom_optimal_area_sqm: Number(e.target.value)})} style={{ width: '100%' }} />
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                    <span>Min Bedroom Width</span>
+                    <span>{scoringParams.bedroom_min_width_m} m</span>
+                  </div>
+                  <input type="range" min="0" max="5" step="0.1" value={scoringParams.bedroom_min_width_m} onChange={e => setScoringParams({...scoringParams, bedroom_min_width_m: Number(e.target.value)})} style={{ width: '100%' }} />
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                    <span>Min Bedroom Length</span>
+                    <span>{scoringParams.bedroom_min_length_m} m</span>
+                  </div>
+                  <input type="range" min="0" max="6" step="0.1" value={scoringParams.bedroom_min_length_m} onChange={e => setScoringParams({...scoringParams, bedroom_min_length_m: Number(e.target.value)})} style={{ width: '100%' }} />
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                    <span>Min Reception Width</span>
+                    <span>{scoringParams.reception_min_width_m} m</span>
+                  </div>
+                  <input type="range" min="0" max="6" step="0.1" value={scoringParams.reception_min_width_m} onChange={e => setScoringParams({...scoringParams, reception_min_width_m: Number(e.target.value)})} style={{ width: '100%' }} />
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                    <span>Min Reception Length</span>
+                    <span>{scoringParams.reception_min_length_m} m</span>
+                  </div>
+                  <input type="range" min="0" max="8" step="0.1" value={scoringParams.reception_min_length_m} onChange={e => setScoringParams({...scoringParams, reception_min_length_m: Number(e.target.value)})} style={{ width: '100%' }} />
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                    <span>High Ceiling Threshold</span>
+                    <span>{scoringParams.high_ceiling_threshold_m} m</span>
+                  </div>
+                  <input type="range" min="2.2" max="3.5" step="0.1" value={scoringParams.high_ceiling_threshold_m} onChange={e => setScoringParams({...scoringParams, high_ceiling_threshold_m: Number(e.target.value)})} style={{ width: '100%' }} />
+                </div>
+
               </div>
             )}
           </div>
