@@ -514,71 +514,73 @@ function App() {
             )}
           </div>
 
-          <div className="filter-group">
-            <label>Minimum Score</label>
-            <input 
-              type="range" min="0" max="100" value={minScore} 
-              onChange={e => setMinScore(Number(e.target.value))} 
-            />
-            <div className="value-display">{minScore} pts</div>
-          </div>
-          
-          <div className="filter-group">
-            <label>Price Range</label>
-            <div style={{ padding: '0 8px', marginTop: '8px', marginBottom: '12px' }}>
-              <Slider 
-                range 
-                min={0} 
-                max={PRICE_MARKS.length - 1} 
-                step={1} 
-                value={[priceToSliderIndex(priceRange[0]), priceToSliderIndex(priceRange[1])]} 
-                onChange={(val) => {
-                  const indices = val as number[];
-                  setPriceRange([PRICE_MARKS[indices[0]], PRICE_MARKS[indices[1]]]);
-                }} 
-                styles={{
-                  track: { backgroundColor: 'var(--accent-color)' },
-                  handle: { borderColor: 'var(--accent-color)', backgroundColor: '#fff', opacity: 1 }
-                }}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div className="filter-group">
+              <label>Minimum Score</label>
+              <input 
+                type="range" min="0" max="100" value={minScore} 
+                onChange={e => setMinScore(Number(e.target.value))} 
               />
+              <div className="value-display">{minScore} pts</div>
             </div>
-            <div className="value-display">£{priceRange[0]} - £{priceRange[1]} pcm</div>
-          </div>
-          
-          <div className="filter-group">
-            <label>Minimum Beds</label>
-            <input 
-              type="range" min="1" max="5" value={minBeds} 
-              onChange={e => setMinBeds(Number(e.target.value))} 
-            />
-            <div className="value-display">{minBeds}+ Beds</div>
-          </div>
+            
+            <div className="filter-group">
+              <label>Price Range</label>
+              <div style={{ padding: '0 8px', marginTop: '8px', marginBottom: '12px' }}>
+                <Slider 
+                  range 
+                  min={0} 
+                  max={PRICE_MARKS.length - 1} 
+                  step={1} 
+                  value={[priceToSliderIndex(priceRange[0]), priceToSliderIndex(priceRange[1])]} 
+                  onChange={(val) => {
+                    const indices = val as number[];
+                    setPriceRange([PRICE_MARKS[indices[0]], PRICE_MARKS[indices[1]]]);
+                  }} 
+                  styles={{
+                    track: { backgroundColor: 'var(--accent-color)' },
+                    handle: { borderColor: 'var(--accent-color)', backgroundColor: '#fff', opacity: 1 }
+                  }}
+                />
+              </div>
+              <div className="value-display">£{priceRange[0]} - £{priceRange[1]} pcm</div>
+            </div>
+            
+            <div className="filter-group">
+              <label>Minimum Beds</label>
+              <input 
+                type="range" min="1" max="5" value={minBeds} 
+                onChange={e => setMinBeds(Number(e.target.value))} 
+              />
+              <div className="value-display">{minBeds}+ Beds</div>
+            </div>
 
-          <div className="filter-group">
-            <label>Minimum Floor Area</label>
-            <input 
-              type="range" min="0" max="2000" step="50" value={minSqft} 
-              onChange={e => setMinSqft(Number(e.target.value))} 
-            />
-            <div className="value-display">{minSqft === 0 ? 'Any' : `${minSqft}+ sqft`}</div>
-          </div>
-          
-          <div className="filter-group">
-            <label>Maximum Price/Sqft</label>
-            <input 
-              type="range" min="0" max="15" step="0.5" value={maxPricePerSqft} 
-              onChange={e => setMaxPricePerSqft(Number(e.target.value))} 
-            />
-            <div className="value-display">{maxPricePerSqft === 0 ? 'Any' : `£${maxPricePerSqft}/sqft`}</div>
-          </div>
+            <div className="filter-group">
+              <label>Minimum Floor Area</label>
+              <input 
+                type="range" min="0" max="2000" step="50" value={minSqft} 
+                onChange={e => setMinSqft(Number(e.target.value))} 
+              />
+              <div className="value-display">{minSqft === 0 ? 'Any' : `${minSqft}+ sqft`}</div>
+            </div>
+            
+            <div className="filter-group">
+              <label>Maximum Price/Sqft</label>
+              <input 
+                type="range" min="0" max="15" step="0.5" value={maxPricePerSqft} 
+                onChange={e => setMaxPricePerSqft(Number(e.target.value))} 
+              />
+              <div className="value-display">{maxPricePerSqft === 0 ? 'Any' : `£${maxPricePerSqft}/sqft`}</div>
+            </div>
 
-          <div className="filter-group">
-            <label>Maximum Commute Time</label>
-            <input 
-              type="range" min="0" max="120" step="5" value={maxCommuteMins} 
-              onChange={e => setMaxCommuteMins(Number(e.target.value))} 
-            />
-            <div className="value-display">{maxCommuteMins === 0 ? 'Any' : `${maxCommuteMins} mins`}</div>
+            <div className="filter-group">
+              <label>Maximum Commute Time</label>
+              <input 
+                type="range" min="0" max="120" step="5" value={maxCommuteMins} 
+                onChange={e => setMaxCommuteMins(Number(e.target.value))} 
+              />
+              <div className="value-display">{maxCommuteMins === 0 ? 'Any' : `${maxCommuteMins} mins`}</div>
+            </div>
           </div>
 
           <div className="filter-group">
