@@ -340,6 +340,7 @@ function App() {
       
       let dynamicScore = 0;
       const sc = p.breakdown.scorecard;
+      const newScorecard = { ...sc };
       
       // Default backend weights
       const DW = { price: 15, commute: 15, total_size: 10, bedroom_size: 10, natural_light: 20, period_features: 15, sash_windows: 5, garden: 10, high_ceilings: 15 };
@@ -365,6 +366,7 @@ function App() {
           const size_ratio = Math.min(1.0, p.sqft! / scoringParams.optimal_total_sqft);
           sc_total_size = DW.total_size * size_ratio;
         }
+        newScorecard['total_size'] = Number(sc_total_size.toFixed(1));
 
         let sc_bed_score = 0;
         const bedroom_length = p.raw_data?.master_bedroom_length_m || 0.0;
@@ -381,6 +383,7 @@ function App() {
              sc_bed_score = DW.bedroom_size * Math.min(1.0, bedroom_length / 4.0);
           }
         }
+        newScorecard['bedroom_size'] = Number(sc_bed_score.toFixed(1));
         
         let sc_high_ceilings = 0;
         const ceiling_height = p.raw_data?.max_ceiling_height_m || 0.0;
@@ -389,6 +392,7 @@ function App() {
             const ratio = scale_range > 0 ? Math.min(1.0, (ceiling_height - scoringParams.high_ceiling_threshold_m) / scale_range) : 1.0;
             sc_high_ceilings = DW.high_ceilings * ratio;
         }
+        newScorecard['high_ceilings'] = Number(sc_high_ceilings.toFixed(1));
 
         // Normalize the score contributions to be out of 100 instead of unbounded
         if (sc.price !== undefined) dynamicScore += (sc.price / Math.max(1, DW.price)) * (safeWeights.price / totalWeight) * 100;
@@ -419,17 +423,30 @@ function App() {
           if (reception_wid > 0) {
               if (reception_len < scoringParams.reception_min_length_m || reception_wid < scoringParams.reception_min_width_m) {
                  dynamicScore -= 20; // Default penalty
+                 newScorecard['penalty_small_reception'] = -20;
+              } else {
+                 delete newScorecard['penalty_small_reception'];
               }
           } else {
              if (reception_len < scoringParams.reception_min_length_m) {
                  dynamicScore -= 20;
+                 newScorecard['penalty_small_reception'] = -20;
+             } else {
+                 delete newScorecard['penalty_small_reception'];
              }
           }
       }
       
       // Ensure score doesn't go below 0 or above 100 for display
       const finalScore = Math.max(0, Math.min(100, Math.round(dynamicScore * 10) / 10));
-      return { ...p, score: finalScore };
+      return { 
+        ...p, 
+        score: finalScore,
+        breakdown: {
+          ...p.breakdown,
+          scorecard: newScorecard
+        }
+      };
     });
   }, [properties, weights, scoringParams]);
 
@@ -492,7 +509,11 @@ function App() {
     return ['https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=800&q=80'];
   };
 
-  const images = getImages(selectedProp);
+  const activeProp = useMemo(() => {
+    return selectedProp ? scoredProperties.find(p => p.id === selectedProp.id) || selectedProp : null;
+  }, [selectedProp, scoredProperties]);
+
+  const images = getImages(activeProp);
 
   const togglePin = async (p: Property) => {
     const newPinnedStatus = !p.pinned;
@@ -930,15 +951,15 @@ function App() {
         )}
         
         {/* Property Drawer */}
-        <div className={`property-drawer glass ${selectedProp ? 'open' : ''}`}>
-          {selectedProp && (
+        <div className={`property-drawer glass ${activeProp ? 'open' : ''}`}>
+          {activeProp && (
             <>
               <div className="drawer-header">
-                {isFresh(selectedProp.listing_update) && <div className="fresh-badge">NEW</div>}
+                {isFresh(activeProp.listing_update) && <div className="fresh-badge">NEW</div>}
                 <div className="drawer-hero-container">
                   <img 
                     src={images[currentImageIndex]} 
-                    alt={selectedProp.raw_data?.display_address || 'Property'} 
+                    alt={activeProp.raw_data?.display_address || 'Property'} 
                     className="drawer-hero-image"
                   />
                   {images.length > 1 && (
@@ -964,11 +985,11 @@ function App() {
                   )}
                 </div>
                 <button 
-                  className={`drawer-action-btn ${selectedProp.pinned ? 'pinned' : ''}`} 
-                  onClick={() => togglePin(selectedProp)}
+                  className={`drawer-action-btn ${activeProp.pinned ? 'pinned' : ''}`} 
+                  onClick={() => togglePin(activeProp)}
                   style={{ right: '56px' }}
                 >
-                  <Pin size={18} fill={selectedProp.pinned ? 'currentColor' : 'none'} />
+                  <Pin size={18} fill={activeProp.pinned ? 'currentColor' : 'none'} />
                 </button>
                 <button 
                   className="drawer-action-btn" 
@@ -980,45 +1001,45 @@ function App() {
               </div>
               
               <div className="score-badge">
-                {Math.round(selectedProp.score || 0)} / 100
+                {Math.round(activeProp.score || 0)} / 100
               </div>
               
               <div className="metric-grid">
                 <div className="metric-card">
                   <span className="metric-label">Price</span>
-                  <span className="metric-value">£{selectedProp.price_pcm} pcm</span>
+                  <span className="metric-value">£{activeProp.price_pcm} pcm</span>
                 </div>
                 <div className="metric-card">
                   <span className="metric-label">Bedrooms</span>
-                  <span className="metric-value">{selectedProp.bedrooms}</span>
+                  <span className="metric-value">{activeProp.bedrooms}</span>
                 </div>
                 <div className="metric-card">
                   <span className="metric-label">Total Size</span>
-                  <span className="metric-value">{selectedProp.sqft ? `${selectedProp.sqft} sqft` : ''}</span>
+                  <span className="metric-value">{activeProp.sqft ? `${activeProp.sqft} sqft` : ''}</span>
                 </div>
                 <div className="metric-card">
                   <span className="metric-label">Type</span>
-                  <span className="metric-value">{selectedProp.property_type || 'Unknown'}</span>
+                  <span className="metric-value">{activeProp.property_type || 'Unknown'}</span>
                 </div>
                 <div className="metric-card">
                   <span className="metric-label">Commute</span>
-                  <span className="metric-value">{selectedProp.commute_mins ? `${Math.ceil(selectedProp.commute_mins)}m` : 'N/A'}</span>
+                  <span className="metric-value">{activeProp.commute_mins ? `${Math.ceil(activeProp.commute_mins)}m` : 'N/A'}</span>
                 </div>
                 <div className="metric-card">
                   <span className="metric-label">£/sqft</span>
-                  <span className="metric-value">{selectedProp.price_per_sqft ? `£${selectedProp.price_per_sqft}` : 'N/A'}</span>
+                  <span className="metric-value">{activeProp.price_per_sqft ? `£${activeProp.price_per_sqft}` : 'N/A'}</span>
                 </div>
                 <div className="metric-card" style={{ gridColumn: '1 / -1' }}>
                   <span className="metric-label">Listed</span>
-                  <span className="metric-value">{formatListedDate(selectedProp.listing_update)}</span>
+                  <span className="metric-value">{formatListedDate(activeProp.listing_update)}</span>
                 </div>
               </div>
 
-              {selectedProp.breakdown?.scorecard && (
+              {activeProp.breakdown?.scorecard && (
                 <div className="workflow-section" style={{ padding: '12px 16px', marginBottom: '24px' }}>
                   <label style={{ marginBottom: '12px', display: 'block', fontSize: '0.95rem' }}>Score Breakdown</label>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {Object.entries(selectedProp.breakdown.scorecard).map(([key, value]) => (
+                    {Object.entries(activeProp.breakdown.scorecard).map(([key, value]) => (
                       <div key={key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
                         <span style={{ textTransform: 'capitalize', color: 'var(--text-secondary)' }}>{key.replace(/_/g, ' ')}</span>
                         <span style={{ fontWeight: 600, color: value > 0 ? 'var(--success)' : (value < 0 ? 'var(--danger)' : 'var(--text-primary)') }}>
@@ -1034,8 +1055,8 @@ function App() {
                 <label>Status</label>
                 <select 
                   className="status-select"
-                  value={selectedProp.user_status || 'None'}
-                  onChange={(e) => updatePropertyDetails(selectedProp.id, { user_status: e.target.value })}
+                  value={activeProp.user_status || 'None'}
+                  onChange={(e) => updatePropertyDetails(activeProp.id, { user_status: e.target.value })}
                 >
                   <option value="None">None</option>
                   <option value="Interested">Interested</option>
@@ -1047,20 +1068,20 @@ function App() {
 
                 <label>Private Notes</label>
                 <NoteEditor 
-                  propId={selectedProp.id} 
-                  initialNote={selectedProp.user_note || ''} 
+                  propId={activeProp.id} 
+                  initialNote={activeProp.user_note || ''} 
                   onSave={(id, note) => updatePropertyDetails(id, { user_note: note })} 
                 />
               </div>
 
               <div className="pros-cons">
-                {selectedProp.breakdown?.pros?.map((pro, i) => (
+                {activeProp.breakdown?.pros?.map((pro, i) => (
                   <div key={i} className="pro-item">
                     <CheckCircle2 size={18} />
                     <span>{pro}</span>
                   </div>
                 ))}
-                {selectedProp.breakdown?.cons?.map((con, i) => (
+                {activeProp.breakdown?.cons?.map((con, i) => (
                   <div key={i} className="con-item">
                     <XCircle size={18} />
                     <span>{con}</span>
@@ -1068,8 +1089,8 @@ function App() {
                 ))}
               </div>
               
-              {selectedProp.raw_data?.url && (
-                <a href={selectedProp.raw_data.url} target="_blank" rel="noopener noreferrer" className="link-button">
+              {activeProp.raw_data?.url && (
+                <a href={activeProp.raw_data.url} target="_blank" rel="noopener noreferrer" className="link-button">
                   View on Rightmove
                 </a>
               )}
