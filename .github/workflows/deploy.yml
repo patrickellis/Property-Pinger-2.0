@@ -1,4 +1,4 @@
-name: CD to Cloud Run
+name: CD to Cloud Run & Firebase
 on:
   push:
     branches: [ main ]
@@ -7,13 +7,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    
     - id: 'auth'
       uses: 'google-github-actions/auth@v2'
       with:
         credentials_json: '${{ secrets.GCP_SA_KEY }}'
-    - name: 'Deploy to Cloud Run Job'
-      uses: 'google-github-actions/deploy-cloudrun@v2'
+        
+    - name: 'Set up Cloud SDK'
+      uses: 'google-github-actions/setup-gcloud@v2'
+      
+    - name: 'Configure Docker'
+      run: gcloud auth configure-docker
+      
+    - name: 'Build and Push Container'
+      run: |
+        docker build -t gcr.io/property-pinger/property-pipeline:latest .
+        docker push gcr.io/property-pinger/property-pipeline:latest
+        
+    - name: 'Update Backend Jobs'
+      run: |
+        gcloud run jobs update london-pinger-job --image gcr.io/property-pinger/property-pipeline:latest --region europe-west2
+        gcloud run jobs update manchester-pinger-job --image gcr.io/property-pinger/property-pipeline:latest --region europe-west2
+        gcloud run jobs update nottingham-pinger-job --image gcr.io/property-pinger/property-pipeline:latest --region europe-west2
+
+    - name: 'Setup Node.js'
+      uses: actions/setup-node@v4
       with:
-        job: 'property-evaluator-job'
-        source: '.'
-        region: 'europe-west2'
+        node-version: '20'
+
+    - name: 'Build and Deploy Dashboard to Firebase'
+      run: |
+        cd dashboard
+        npm ci
+        npm run build
+        cd ..
+        npm install -g firebase-tools
+        firebase deploy --only hosting
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
