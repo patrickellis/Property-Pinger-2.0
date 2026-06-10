@@ -27,11 +27,13 @@ class PropertyListing(BaseModel):
     # Fields populated during evaluation
     sqft: Optional[int] = None
     reception_length_m: Optional[float] = None
+    reception_width_m: Optional[float] = None
     reception_on_ground_floor: Optional[bool] = None
     max_ceiling_height_m: Optional[float] = None
     floor_level: Optional[int] = None
     has_lift: Optional[bool] = None
     master_bedroom_length_m: Optional[float] = None
+    master_bedroom_width_m: Optional[float] = None
     is_noisy_location: Optional[bool] = None
     commute_mins: Optional[int] = None
     has_ac: Optional[bool] = None

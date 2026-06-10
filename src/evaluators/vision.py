@@ -53,6 +53,9 @@ class FloorplanDetails(BaseModel):
     reception_length_m: float = Field(
         description="The longest dimension of the largest reception room/living room in meters. Convert from feet/inches if necessary. 0.0 if not found."
     )
+    reception_width_m: float = Field(
+        description="The shortest dimension of the largest reception room/living room in meters. Convert from feet/inches if necessary. 0.0 if not found."
+    )
     reception_on_ground_floor: bool = Field(
         description="True if the main reception room is on the ground floor."
     )
@@ -67,6 +70,9 @@ class FloorplanDetails(BaseModel):
     )
     master_bedroom_length_m: float = Field(
         description="The longest dimension of the largest bedroom in meters. 0.0 if not found."
+    )
+    master_bedroom_width_m: float = Field(
+        description="The shortest dimension of the largest bedroom in meters. 0.0 if not found."
     )
 
 
@@ -115,13 +121,13 @@ def evaluate_property_images(
         "temperature": 0.1,
     }
 
-    # Primary call to 3.5 Flash, fallback to 2.5 Flash
+    # Primary call to 3.1 Flash Lite, fallback to 2.5 Flash
     try:
         response = client.models.generate_content(
-            model="gemini-3.5-flash", contents=[prompt] + images, config=config
+            model="gemini-3.1-flash-lite", contents=[prompt] + images, config=config
         )
     except errors.APIError as e:
-        logging.warning(f"3.5 Flash overloaded ({e}). Falling back to 2.5 Flash.")
+        logging.warning(f"3.1 Flash Lite overloaded ({e}). Falling back to 2.5 Flash.")
         response = client.models.generate_content(
             model="gemini-2.5-flash", contents=[prompt] + images, config=config
         )
@@ -140,11 +146,13 @@ def extract_floorplan_details(floorplan_urls: list[str], description: str) -> Fl
     empty_baseline = FloorplanDetails(
         total_sqft=0,
         reception_length_m=0.0,
+        reception_width_m=0.0,
         reception_on_ground_floor=False,
         max_ceiling_height_m=0.0,
         floor_level=0,
         has_lift=False,
         master_bedroom_length_m=0.0,
+        master_bedroom_width_m=0.0,
     )
 
     if not floorplan_urls:

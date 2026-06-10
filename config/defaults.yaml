@@ -32,6 +32,17 @@ dealbreakers:
   # Target maximum average commute time in minutes. Commutes over this incur a penalty.
   max_commute_mins: 60
 
+scoring_parameters:
+  optimal_total_sqft: 1500
+  high_ceiling_threshold_m: 2.7
+  high_ceiling_max_scale_m: 3.3
+  bedroom_optimal_area_sqm: 16.0
+  bedroom_min_width_m: 0.0
+  bedroom_min_length_m: 0.0
+  reception_min_width_m: 0.0
+  reception_min_length_m: 2.14
+
+
 weights:
   # Positive score additions (bonuses) for desirable traits.
   price: 15

@@ -108,73 +108,106 @@ def calculate_match_score(
     if gd_score > 0: breakdown["pros"].append("Private Garden")
 
     if visual_data.exterior_material.lower() in ["pebble dash", "cladding"]:
-        pen = config["penalties"]["ugly_exterior"]
+        pen = config["penalties"].get("ugly_exterior", 0)
         score += pen
         breakdown["scorecard"]["penalty_ugly_exterior"] = pen
         breakdown["cons"].append(f"Ugly exterior ({visual_data.exterior_material})")
 
     if getattr(visual_data, "has_virtual_staging", False):
-        pen = config["penalties"].get("virtual_staging", -15)
+        pen = config["penalties"].get("virtual_staging", 0)
         score += pen
         breakdown["scorecard"]["penalty_virtual_staging"] = pen
         breakdown["cons"].append("Virtual Staging")
     if getattr(visual_data, "has_wide_angle_distortion", False):
-        pen = config["penalties"].get("wide_angle_distortion", -10)
+        pen = config["penalties"].get("wide_angle_distortion", 0)
         score += pen
         breakdown["scorecard"]["penalty_wide_angle_distortion"] = pen
         breakdown["cons"].append("Wide Angle Distortion")
     if getattr(visual_data, "epc_rating", "Unknown") in ["F", "G"]:
-        pen = config["penalties"].get("poor_epc_rating", -30)
+        pen = config["penalties"].get("poor_epc_rating", 0)
         score += pen
         breakdown["scorecard"]["penalty_poor_epc"] = pen
         breakdown["cons"].append(f"Poor EPC Rating ({visual_data.epc_rating})")
 
     if property_data.is_noisy_location:
-        pen = config["penalties"].get("noisy_location", -20)
+        pen = config["penalties"].get("noisy_location", 0)
         score += pen
         breakdown["scorecard"]["penalty_noisy_location"] = pen
         breakdown["cons"].append("Noisy Location (near A-road/railway)")
 
     # --- 4. Size Scoring (Bonus) ---
+    scoring_params = config.get("scoring_parameters", {})
     size_score = 0
     # If the floorplan extraction worked, grant proportion points
     if (property_data.sqft or 0) > 0:
-        size_ratio = min(
-            1.0, property_data.sqft / 1500
-        )  # Assumes 1500 sqft is "perfect"
-        size_score = weights["total_size"] * size_ratio
+        opt_sqft = scoring_params.get("optimal_total_sqft", 1500)
+        size_ratio = min(1.0, property_data.sqft / opt_sqft)
+        size_score = weights.get("total_size", 0) * size_ratio
         score += size_score
     breakdown["scorecard"]["total_size"] = round(size_score, 1)
 
     bed_score = 0
     bedroom_length = property_data.master_bedroom_length_m or 0.0
+    bedroom_width = property_data.master_bedroom_width_m or 0.0
+    
+    opt_area = scoring_params.get("bedroom_optimal_area_sqm", 16.0)
+    min_width = scoring_params.get("bedroom_min_width_m", 0.0)
+    min_length = scoring_params.get("bedroom_min_length_m", 0.0)
+
     if bedroom_length > 0:
-        bed_ratio = min(1.0, bedroom_length / 4.0) # Assumes 4m is perfect
-        bed_score = weights["bedroom_size"] * bed_ratio
-        score += bed_score
+        if bedroom_width > 0:
+            if bedroom_length >= min_length and bedroom_width >= min_width:
+                area = bedroom_length * bedroom_width
+                bed_ratio = min(1.0, area / opt_area)
+                bed_score = weights.get("bedroom_size", 0) * bed_ratio
+                score += bed_score
+        else:
+            # Legacy fallback
+            bed_ratio = min(1.0, bedroom_length / 4.0)
+            bed_score = weights.get("bedroom_size", 0) * bed_ratio
+            score += bed_score
     breakdown["scorecard"]["bedroom_size"] = round(bed_score, 1)
 
     # --- 5. Floorplan Enhancements (Penalties & Bonuses) ---
     # If we successfully extracted floorplan details (reception_length_m > 0):
     reception_len = property_data.reception_length_m or 0.0
+    reception_wid = property_data.reception_width_m or 0.0
+    rec_min_len = scoring_params.get("reception_min_length_m", 2.14)
+    rec_min_wid = scoring_params.get("reception_min_width_m", 0.0)
+    
     if reception_len > 0:
-        if reception_len < 2.14:
-            pen = config["penalties"].get("small_reception", -20)
-            score += pen
-            breakdown["scorecard"]["penalty_small_reception"] = pen
-            breakdown["cons"].append(f"Small Reception ({reception_len}m)")
+        if reception_wid > 0:
+            if reception_len < rec_min_len or reception_wid < rec_min_wid:
+                pen = config["penalties"].get("small_reception", 0)
+                score += pen
+                breakdown["scorecard"]["penalty_small_reception"] = pen
+                breakdown["cons"].append(f"Small Reception ({reception_len}m x {reception_wid}m)")
+        else:
+            # Legacy fallback
+            if reception_len < rec_min_len:
+                pen = config["penalties"].get("small_reception", 0)
+                score += pen
+                breakdown["scorecard"]["penalty_small_reception"] = pen
+                breakdown["cons"].append(f"Small Reception ({reception_len}m)")
         
         if property_data.reception_on_ground_floor is False:
-            pen = config["penalties"].get("not_ground_floor_reception", -15)
+            pen = config["penalties"].get("not_ground_floor_reception", 0)
             score += pen
             breakdown["scorecard"]["penalty_not_ground_floor_reception"] = pen
             breakdown["cons"].append("Upper Floor Reception")
 
     hc_score = 0
     ceiling_height = property_data.max_ceiling_height_m or 0.0
-    if ceiling_height > 2.7:
-        # Scale bonus proportionally up to 3.3m
-        ratio = min(1.0, (ceiling_height - 2.7) / (3.3 - 2.7))
+    hc_threshold = scoring_params.get("high_ceiling_threshold_m", 2.7)
+    hc_max_scale = scoring_params.get("high_ceiling_max_scale_m", 3.3)
+    
+    if ceiling_height > hc_threshold:
+        # Scale bonus proportionally
+        scale_range = hc_max_scale - hc_threshold
+        if scale_range <= 0:
+            ratio = 1.0
+        else:
+            ratio = min(1.0, (ceiling_height - hc_threshold) / scale_range)
         hc_score = weights.get("high_ceilings", 15) * ratio
         score += hc_score
         breakdown["pros"].append(f"High Ceilings ({ceiling_height}m)")
