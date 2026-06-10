@@ -191,6 +191,8 @@ function App() {
   const [weights, setWeights] = useLocalStorageState('pinger_weights', {
     price: 15,
     commute: 15,
+    total_size: 10,
+    bedroom_size: 10,
     natural_light: 20,
     period_features: 15,
     sash_windows: 5,
@@ -328,7 +330,7 @@ function App() {
       const sc = p.breakdown.scorecard;
       
       // Default backend weights
-      const DW = { price: 15, commute: 15, natural_light: 20, period_features: 15, sash_windows: 5, garden: 10, high_ceilings: 15 };
+      const DW = { price: 15, commute: 15, total_size: 10, bedroom_size: 10, natural_light: 20, period_features: 15, sash_windows: 5, garden: 10, high_ceilings: 15 };
       
       // Calculate total user weight to normalize the scores out of 100
       const totalWeight = Object.values(weights).reduce((sum, w) => sum + w, 0);
@@ -338,6 +340,8 @@ function App() {
         if (sc.price !== undefined) dynamicScore += (sc.price / Math.max(1, DW.price)) * (weights.price / totalWeight) * 100;
         // Commute score can be negative, scaling applies the same
         if (sc.commute !== undefined) dynamicScore += (sc.commute / Math.max(1, DW.commute)) * (weights.commute / totalWeight) * 100;
+        if (sc.total_size !== undefined) dynamicScore += DW.total_size > 0 ? (sc.total_size / DW.total_size) * (weights.total_size / totalWeight) * 100 : 0;
+        if (sc.bedroom_size !== undefined) dynamicScore += DW.bedroom_size > 0 ? (sc.bedroom_size / DW.bedroom_size) * (weights.bedroom_size / totalWeight) * 100 : 0;
         if (sc.natural_light !== undefined) dynamicScore += (sc.natural_light / Math.max(1, DW.natural_light)) * (weights.natural_light / totalWeight) * 100;
         if (sc.period_features !== undefined) dynamicScore += DW.period_features > 0 ? (sc.period_features / DW.period_features) * (weights.period_features / totalWeight) * 100 : 0;
         if (sc.sash_windows !== undefined) dynamicScore += DW.sash_windows > 0 ? (sc.sash_windows / DW.sash_windows) * (weights.sash_windows / totalWeight) * 100 : 0;
