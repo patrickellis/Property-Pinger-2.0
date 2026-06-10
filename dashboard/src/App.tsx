@@ -599,29 +599,6 @@ function App() {
             </select>
           </div>
 
-          <div className="filter-group">
-            <label>Property Type</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
-              {uniqueTypes.map(type => (
-                <label key={type} className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem', color: '#cbd5e1' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={!disabledTypes.includes(type)}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setDisabledTypes(disabledTypes.filter(t => t !== type));
-                      } else {
-                        setDisabledTypes([...disabledTypes, type]);
-                      }
-                    }} 
-                    style={{ accentColor: 'var(--accent)' }}
-                  />
-                  <span style={{ textTransform: 'capitalize' }}>{type}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          
           <div className="toggle-group" onClick={() => setRequireGarden(!requireGarden)}>
             <div className={`toggle-switch ${requireGarden ? 'active' : ''}`}></div>
             <label style={{ margin: 0, cursor: 'pointer' }}>Require Garden</label>
@@ -646,7 +623,32 @@ function App() {
             <div className={`toggle-switch ${showIgnored ? 'active' : ''}`}></div>
             <label style={{ margin: 0, cursor: 'pointer' }}>Show Ignored Properties</label>
           </div>
+
+
+          <div className="filter-group">
+            <label>Property Type</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+              {uniqueTypes.map(type => (
+                <label key={type} className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem', color: '#cbd5e1' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={!disabledTypes.includes(type)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setDisabledTypes(disabledTypes.filter(t => t !== type));
+                      } else {
+                        setDisabledTypes([...disabledTypes, type]);
+                      }
+                    }} 
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  <span style={{ textTransform: 'capitalize' }}>{type}</span>
+                </label>
+              ))}
+            </div>
+          </div>
           
+
         </div>
         
         <div style={{ marginTop: 'auto', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
