@@ -24,6 +24,11 @@ def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_prope
     # Zoopla caps results typically after 40 pages (like Rightmove's 42)
     for page in range(1, 42):
         parsed = urlparse(base_search_url)
+        
+        # Force List View for Zoopla (map view doesn't render cards in HTML)
+        new_path = parsed.path.replace('/map/property/', '/property/').replace('/map/', '/property/')
+        parsed = parsed._replace(path=new_path)
+        
         query_params = parse_qsl(parsed.query)
         query_params = [(k, v) for k, v in query_params if k != 'pn']
         if page > 1:
@@ -32,7 +37,7 @@ def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_prope
         new_query = urlencode(query_params)
         paginated_url = urlunparse(parsed._replace(query=new_query))
         encoded_url = quote(paginated_url)
-        proxy_url = f"http://api.scraperapi.com?api_key={api_key}&url={encoded_url}&premium=true"
+        proxy_url = f"http://api.scraperapi.com?api_key={api_key}&url={encoded_url}&ultra_premium=true"
         
         try:
             response = requests.get(proxy_url, timeout=45)
