@@ -8,6 +8,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from core.models import FloorplanGraph
 from tenacity import retry, wait_exponential, stop_after_attempt
+from typing import Optional
 
 # Initialize the client. GCP automatically injects GEMINI_API_KEY from Secret Manager.
 client = genai.Client()
@@ -75,7 +76,7 @@ class FloorplanDetails(BaseModel):
     master_bedroom_width_m: float = Field(
         description="The shortest dimension of the largest bedroom in meters. 0.0 if not found."
     )
-    floorplan_graph: FloorplanGraph | None = Field(
+    floorplan_graph: Optional[FloorplanGraph] = Field(
         default=None,
         description="A full graph representation of the floorplan layout, detailing rooms and doors."
     )

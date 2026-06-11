@@ -8,11 +8,11 @@ max_unseen_properties: 1000
 alert_threshold: 70
 
 # Properties scoring below this threshold are marked as ignored and never re-evaluated.
-ignore_threshold: 50
+ignore_threshold: 30
 
 dealbreakers:
   # Maximum monthly rent in GBP. Properties above this are instantly rejected.
-  max_price_pcm: 12000
+  max_price_pcm: 20000
   # Minimum number of bedrooms.
   min_bedrooms: 1
   # Maximum number of bedrooms.
@@ -54,4 +54,3 @@ penalties:
   not_ground_floor_reception: -15
   wide_angle_distortion: -10
   poor_epc_rating: -30
-  noisy_location: -20

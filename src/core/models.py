@@ -55,7 +55,7 @@ class PropertyListing(BaseModel):
     has_lift: Optional[bool] = None
     master_bedroom_length_m: Optional[float] = None
     master_bedroom_width_m: Optional[float] = None
-    is_noisy_location: Optional[bool] = None
+
     commute_mins: Optional[int] = None
     has_ac: Optional[bool] = None
     has_underfloor_heating: Optional[bool] = None

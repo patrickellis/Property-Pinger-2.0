@@ -1,8 +1,9 @@
 import logging
 import math
 from core.models import PropertyListing
+from typing import Optional
 
-def passes_dealbreakers(property_data: PropertyListing, config: dict) -> tuple[bool, str | None]:
+def passes_dealbreakers(property_data: PropertyListing, config: dict) -> tuple[bool, Optional[str]]:
     """
     Evaluates zero-cost, hard constraints before we spend money on Gemini or Maps APIs.
     """
@@ -197,12 +198,6 @@ def calculate_match_score(
             breakdown["scorecard"]["penalty_poor_epc"] = pen
             breakdown["cons"].append(f"Poor EPC Rating ({visual_data.epc_rating})")
 
-    if property_data.is_noisy_location:
-        pen = penalties.get("noisy_location", 0)
-        if pen != 0:
-            score += pen
-            breakdown["scorecard"]["penalty_noisy_location"] = pen
-            breakdown["cons"].append("Noisy Location (near A-road/railway)")
 
     # --- 4. Size Scoring (Bonus) ---
     scoring_params = config.get("scoring_parameters", {})

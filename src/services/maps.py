@@ -11,6 +11,14 @@ def get_commute_times(origin_lat: float, origin_lng: float, destinations: list[s
     if not origin_lat or not origin_lng:
         return {'average_mins': 999, 'details': {}}
         
+    from core.db import get_cached_commute, cache_commute
+    
+    # Check cache first
+    cached = get_cached_commute(origin_lat, origin_lng, destinations, mode)
+    if cached:
+        logging.info(f"[{origin_lat},{origin_lng}] Commute grid cache hit!")
+        return cached
+
     origins = f"{origin_lat},{origin_lng}"
     # The Distance Matrix API accepts multiple destinations separated by a pipe '|'
     dests = "|".join(destinations)
@@ -35,45 +43,14 @@ def get_commute_times(origin_lat: float, origin_lng: float, destinations: list[s
                 details[dest] = 999 # Unreachable / No transit route
                 
         avg_commute = sum(times) / len(times) if times else 999
-        return {'average_mins': avg_commute, 'details': details}
+        result = {'average_mins': avg_commute, 'details': details}
+        
+        # Save to cache
+        cache_commute(origin_lat, origin_lng, destinations, mode, result)
+        
+        return result
         
     except Exception as e:
         logging.error(f"Google Maps API request failed: {e}")
         return {'average_mins': 999, 'details': {}}
-
-@retry(wait=wait_exponential(multiplier=2, min=5, max=60), stop=stop_after_attempt(5))
-def check_noise_pollution(lat: float, lng: float) -> bool:
-    """
-    Checks if the coordinates are within 50 meters of a major road (primary/trunk) or railway.
-    Returns True if noisy infrastructure is found, False otherwise.
-    """
-    if not lat or not lng:
-        return False
-        
-    # Query for primary/trunk roads and railways within 50m of the coordinate
-    query = f"""
-    [out:json][timeout:10];
-    (
-      way["highway"~"^(primary|trunk)$"](around:50,{lat},{lng});
-      way["railway"="rail"](around:50,{lat},{lng});
-    );
-    out body;
-    """
-    url = "https://overpass-api.de/api/interpreter"
-    
-    try:
-        import time
-        import random
-        # Add random jitter (0.5 to 2.5 seconds) to prevent 429 Too Many Requests
-        # from the public Overpass API when multiple threads run concurrently
-        time.sleep(random.uniform(0.5, 2.5))
-        
-        headers = {"User-Agent": "PropertyPingerBot/1.0"}
-        response = requests.post(url, data={'data': query}, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        return len(data.get("elements", [])) > 0
-    except Exception as e:
-        logging.error(f"Overpass API request failed: {e}")
-        raise e
 

@@ -152,3 +152,35 @@ def find_duplicate_property(property_data: PropertyListing) -> tuple[Optional[st
     except GoogleAPIError as e:
         logging.error(f"Database duplicate check error: {e}")
         return None
+
+def get_cached_commute(origin_lat: float, origin_lng: float, destinations: list[str], mode: str) -> Optional[dict]:
+    if not db:
+        return None
+    try:
+        import hashlib
+        dest_str = "|".join(destinations)
+        dest_hash = hashlib.md5(dest_str.encode()).hexdigest()
+        cache_id = f"{round(origin_lat, 3)}_{round(origin_lng, 3)}_{mode}_{dest_hash}"
+        
+        doc = db.collection('commute_cache').document(cache_id).get()
+        if doc.exists:
+            return doc.to_dict().get('commute_metrics')
+    except Exception as e:
+        logging.error(f"Failed to read commute cache: {e}")
+    return None
+
+def cache_commute(origin_lat: float, origin_lng: float, destinations: list[str], mode: str, commute_metrics: dict):
+    if not db:
+        return
+    try:
+        import hashlib
+        dest_str = "|".join(destinations)
+        dest_hash = hashlib.md5(dest_str.encode()).hexdigest()
+        cache_id = f"{round(origin_lat, 3)}_{round(origin_lng, 3)}_{mode}_{dest_hash}"
+        
+        db.collection('commute_cache').document(cache_id).set({
+            'commute_metrics': commute_metrics,
+            'created_at': firestore.SERVER_TIMESTAMP
+        }, merge=True)
+    except Exception as e:
+        logging.error(f"Failed to write commute cache: {e}")

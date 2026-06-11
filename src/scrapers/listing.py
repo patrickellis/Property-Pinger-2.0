@@ -152,12 +152,12 @@ def _extract_zoopla_app_router_fallback(soup: BeautifulSoup, html: str, url: str
 
         # Coordinates
         lat, lng = None, None
-        coord_match = re.search(r'"latitude"[^\w]+([0-9.-]+).*?"longitude"[^\w]+([0-9.-]+)', html, re.IGNORECASE | re.DOTALL)
+        coord_match = re.search(r'"latitude"[^0-9.-]+([0-9.-]+).*?"longitude"[^0-9.-]+([0-9.-]+)', html, re.IGNORECASE | re.DOTALL)
         if coord_match:
             lat = float(coord_match.group(1))
             lng = float(coord_match.group(2))
         else:
-            coord_match2 = re.search(r'latitude[^\w]+([0-9.-]+).*?longitude[^\w]+([0-9.-]+)', html, re.IGNORECASE | re.DOTALL)
+            coord_match2 = re.search(r'latitude[^0-9.-]+([0-9.-]+).*?longitude[^0-9.-]+([0-9.-]+)', html, re.IGNORECASE | re.DOTALL)
             if coord_match2:
                 lat = float(coord_match2.group(1))
                 lng = float(coord_match2.group(2))

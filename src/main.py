@@ -10,7 +10,7 @@ from evaluators.scoring import calculate_match_score, passes_dealbreakers
 from evaluators.vision import evaluate_property_images, extract_floorplan_details, PropertyVisuals
 from scrapers.listing import extract_rightmove_data_via_api, extract_zoopla_data_via_api
 from scrapers.search import fetch_search_results
-from services.maps import get_commute_times, check_noise_pollution
+from services.maps import get_commute_times
 from services.telegram import send_telegram_alert
 from core.models import PropertyListing
 
@@ -233,8 +233,19 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         property_data.has_wide_angle_distortion = old_raw.has_wide_angle_distortion
         property_data.epc_rating = old_raw.epc_rating
 
-    # 6. Heavy Evaluation (Google Maps & Overpass)
-    if location_changed or not old_raw or old_raw.commute_metrics_raw is None:
+    # 6. Heavy Evaluation (Google Maps)
+    # Pre-check: Calculate maximum possible score (assuming 0-minute commute)
+    max_score, _ = calculate_match_score(
+        property_data, visual_metrics, {'average_mins': 0, 'details': {}}, config
+    )
+    alert_thresh = config.get("alert_threshold", 70)
+
+    if max_score < alert_thresh:
+        logging.info(f"[{property_id}] Skipping Maps API (max possible score {max_score:.1f} < {alert_thresh})")
+        commute_metrics = {'average_mins': 999, 'details': {}}
+        property_data.commute_metrics_raw = commute_metrics
+        property_data.commute_mins = None
+    elif location_changed or not old_raw or old_raw.commute_metrics_raw is None:
         commute_metrics = get_commute_times(
             origin_lat=property_data.latitude,
             origin_lng=property_data.longitude,
@@ -243,16 +254,12 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
             mode=config["locations"]["transit_mode"],
             api_key=os.environ.get("GOOGLE_MAPS_API_KEY", ""),
         )
-        property_data.is_noisy_location = check_noise_pollution(
-            property_data.latitude, property_data.longitude
-        )
         property_data.commute_metrics_raw = commute_metrics
         property_data.commute_mins = commute_metrics.get("average_mins")
     else:
         logging.info(f"[{property_id}] Skipping Maps API (cache hit)")
         commute_metrics = old_raw.commute_metrics_raw
         property_data.commute_metrics_raw = old_raw.commute_metrics_raw
-        property_data.is_noisy_location = old_raw.is_noisy_location
         property_data.commute_mins = old_raw.commute_mins
 
     final_score, breakdown = calculate_match_score(

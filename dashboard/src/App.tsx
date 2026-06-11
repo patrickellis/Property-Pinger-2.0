@@ -414,7 +414,7 @@ function App() {
     not_ground_floor_reception: -15,
     wide_angle_distortion: -10,
     poor_epc_rating: -30,
-    noisy_location: -20
+
   });
 
   const [scoringParams, setScoringParams] = useLocalStorageState('pinger_scoringParams', {
@@ -524,11 +524,20 @@ function App() {
               pps = Math.round((price / sqft) * 10) / 10;
             }
 
+            let finalLng = lng;
+            // Hotfix for the coordinate regex bug that dropped negative signs on longitudes
+            if (lat > 52.0 && lng > 0.5) {
+              const addrStr = ((data.display_address || '') + ' ' + (data.description || '')).toLowerCase();
+              if (/(derby|nottingham|manchester|leicester|wigston|hinckley|matlock|stockport|altrincham|beeston)/.test(addrStr)) {
+                finalLng = -Math.abs(lng);
+              }
+            }
+
             props.push({ 
               ...data, 
               id: doc.id,
               latitude: lat,
-              longitude: lng,
+              longitude: finalLng,
               price_pcm: price,
               bedrooms: beds,
               property_type: type,
@@ -658,13 +667,7 @@ function App() {
         }
       }
 
-      const noisy = p.raw_data?.is_noisy_location ?? (p as any).is_noisy_location;
-      if (noisy) {
-        if (penalties.noisy_location !== 0) {
-          dynamicScore += penalties.noisy_location;
-          newScorecard['penalty_noisy_location'] = penalties.noisy_location;
-        }
-      }
+
 
       const recGround = p.raw_data?.reception_on_ground_floor ?? p.reception_on_ground_floor;
       if (recGround === false) {
