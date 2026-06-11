@@ -14,7 +14,8 @@ venv.bak/
 
 # GCP / Local credentials
 credentials.json
-*.json
+*creds*.json
+*service-account*.json
 
 # Mac OS
 .DS_Store
