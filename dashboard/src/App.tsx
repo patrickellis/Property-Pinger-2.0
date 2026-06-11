@@ -526,13 +526,6 @@ function App() {
             }
 
             let finalLng = lng;
-            // Hotfix for the coordinate regex bug that dropped negative signs on longitudes
-            if (lat > 52.0 && lng > 0.5) {
-              const addrStr = ((data.display_address || '') + ' ' + (data.description || '')).toLowerCase();
-              if (/(derby|nottingham|manchester|leicester|wigston|hinckley|matlock|stockport|altrincham|beeston)/.test(addrStr)) {
-                finalLng = -Math.abs(lng);
-              }
-            }
 
             props.push({ 
               ...data, 
