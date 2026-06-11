@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from urllib.parse import quote
 
 import requests
@@ -132,89 +133,112 @@ def extract_zoopla_data_via_api(url: str, api_key: str) -> Optional[PropertyList
         return None
     soup = BeautifulSoup(response.text, "html.parser")
     
-    # 1. Parse Schema.org RealEstateListing JSON-LD
-    schema_data = None
-    for s in soup.find_all("script", type="application/ld+json"):
-        if s.string:
-            try:
-                data = json.loads(s.string)
-                if data.get("@type") == "RealEstateListing":
-                    schema_data = data
-                    break
-            except Exception:
-                continue
-
-    if not schema_data:
-        logging.warning(f"Schema.org RealEstateListing not found for {url}. Captcha hit or listing removed.")
+    # 1. Extract __NEXT_DATA__ script
+    next_data_script = soup.find("script", id="__NEXT_DATA__")
+    if not next_data_script or not next_data_script.string:
+        logging.warning(f"__NEXT_DATA__ not found for {url}. Captcha hit or listing removed.")
         return None
 
     try:
+        raw_data = json.loads(next_data_script.string)
+        
+        page_props = raw_data.get("props", {}).get("pageProps", {})
+        listing_details = page_props.get("listingDetails", {}) or page_props.get("regularListing", {}) or {}
+        
+        if not listing_details:
+            logging.error(f"Could not find listingDetails in __NEXT_DATA__ for {url}")
+            return None
+
         # Extract ID from URL
         url_match = re.search(r'/details/(\d+)', url)
-        listing_id = url_match.group(1) if url_match else str(hash(url))
+        listing_id = str(listing_details.get("listingId") or (url_match.group(1) if url_match else str(hash(url))))
 
-        # Offers
-        offers = schema_data.get("offers", {})
-        price = str(offers.get("price", "0"))
+        pricing = listing_details.get("pricing", {})
+        price_pcm = str(pricing.get("price") or listing_details.get("analyticsTaxonomy", {}).get("priceActual") or "0")
 
-        # Beds / Baths from additionalProperty
-        bedrooms = 0
-        bathrooms = 0
-        for prop in schema_data.get("additionalProperty", []):
-            if prop.get("name") == "Bedrooms":
-                bedrooms = int(prop.get("value", 0))
-            elif prop.get("name") == "Bathrooms":
-                bathrooms = int(prop.get("value", 0))
+        counts = listing_details.get("counts", {})
+        bedrooms = counts.get("numBedrooms", 0)
+        bathrooms = counts.get("numBathrooms", 0)
+        
+        taxonomy = listing_details.get("analyticsTaxonomy", {})
+        property_type = taxonomy.get("propertyType", "Unknown")
+        postcode = f"{taxonomy.get('outcode', '')} {taxonomy.get('incode', '')}".strip()
 
-        # Lat/Lng from Next.js chunks via regex
+        # Location could be in analyticsTaxonomy or a location object
         lat, lng = None, None
         coord_match = re.search(r'"coordinates":\{"latitude":([0-9.-]+),"longitude":([0-9.-]+)\}', response.text)
         if coord_match:
             lat = float(coord_match.group(1))
             lng = float(coord_match.group(2))
 
-        # Images via regex from the page (Next.js chunks)
+        # Build Image URLs
         images = []
-        img_matches = re.findall(r'"(https://lid\.zoocdn\.com/[^"]+\.jpg)"', response.text)
-        if img_matches:
-            # maintain order but remove duplicates
-            seen = set()
-            for img in img_matches:
-                # filter out very small thumbnails if possible, but for now just take all
-                if img not in seen:
-                    images.append(img)
-                    seen.add(img)
+        for img in listing_details.get("propertyImage", []):
+            filename = img.get("filename")
+            if filename:
+                # Zoopla uses lid.zoocdn.com for high-res images
+                images.append(f"https://lid.zoocdn.com/1024/768/{filename}")
+                
+        # If array is empty, fallback to regex
+        if not images:
+            img_matches = re.findall(r'"(https://lid\.zoocdn\.com/[^"]+\.jpg)"', response.text)
+            if img_matches:
+                seen = set()
+                for img in img_matches:
+                    if img not in seen:
+                        images.append(img)
+                        seen.add(img)
 
-        # Ensure we have at least the schema image
-        schema_img = schema_data.get("image")
-        if schema_img and schema_img not in images:
-            images.insert(0, schema_img)
+        # Build Floorplan URLs
+        floorplans = []
+        for fp in listing_details.get("floorPlan", []):
+            filename = fp.get("filename")
+            if filename:
+                floorplans.append(f"https://lid.zoocdn.com/1024/768/{filename}")
+
+        # Description and Features
+        detailed_desc = listing_details.get("detailedDescription", "")
+        features = " ".join(listing_details.get("bullets", []))
+        full_description = f"{detailed_desc}\n{features}"
+        
+        # Garden and Furnishing heuristics
+        has_garden = bool(re.search(r'\bgarden\b', full_description, re.IGNORECASE))
+        furnishing = taxonomy.get("furnishedState", "unknown").lower()
+        if furnishing == "unfurnished":
+            furnishing = "unfurnished"
+        elif "furnished" in furnishing:
+            furnishing = "furnished"
+        else:
+            furnishing = "unknown"
 
         cleaned_data = {
             "id": listing_id,
             "url": url,
-            "status": {},
-            "price_pcm": price,
+            "status": listing_details.get("statusSummary", {}),
+            "price_pcm": price_pcm,
             "bedrooms": bedrooms,
             "bathrooms": bathrooms,
-            "property_type": "Property", # Zoopla schema doesn't explicitly expose property type easily, fallback to generic
-            "display_address": schema_data.get("name", ""),
-            "postcode": "",
-            "uk_country": "",
+            "property_type": property_type,
+            "display_address": listing_details.get("displayAddress", ""),
+            "postcode": postcode,
+            "uk_country": taxonomy.get("countryCode", "gb").upper(),
             "latitude": lat,
             "longitude": lng,
             "nearest_stations": [],
-            "has_garden": "garden" in schema_data.get("description", "").lower(),
-            "description": schema_data.get("description", ""),
-            "furnishing": "unknown",
-            "listing_update": schema_data.get("datePosted", "Date Unknown"),
+            "has_garden": has_garden,
+            "description": full_description,
+            "furnishing": furnishing,
+            "listing_update": listing_details.get("statusSummary", {}).get("label") or "Date Unknown",
             "images": images,
-            "floorplans": []
+            "floorplans": floorplans
         }
 
         # Validate with Pydantic
         return PropertyListing(**cleaned_data)
 
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to decode __NEXT_DATA__ JSON for Zoopla {url}: {e}")
+        return None
     except Exception as e:
         import traceback
         logging.error(f"Error parsing Zoopla property data for {url}: {e}\n{traceback.format_exc()}")
