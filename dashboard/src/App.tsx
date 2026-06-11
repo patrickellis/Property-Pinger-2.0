@@ -428,6 +428,7 @@ function App() {
   const [minScore, setMinScore] = useLocalStorageState('pinger_minScore', 50);
   const [priceRange, setPriceRange] = useLocalStorageState<number[]>('pinger_priceRange', [0, 99999]);
   const [minBeds, setMinBeds] = useLocalStorageState('pinger_minBeds', 1);
+  const [maxBeds, setMaxBeds] = useLocalStorageState('pinger_maxBeds', 5);
   const [minSqft, setMinSqft] = useLocalStorageState('pinger_minSqft', 0);
   const [requireGarden, setRequireGarden] = useLocalStorageState('pinger_requireGarden', false);
   const [requireLift, setRequireLift] = useLocalStorageState('pinger_requireLift', false);
@@ -442,6 +443,9 @@ function App() {
   const [addedInLast, setAddedInLast] = useLocalStorageState('pinger_addedInLast', 0);
   const [showIgnored, setShowIgnored] = useLocalStorageState('pinger_showIgnored', false);
   const [viewedProperties, setViewedProperties] = useLocalStorageState<string[]>('pinger_viewedProperties', []);
+  const [hideViewed, setHideViewed] = useLocalStorageState('pinger_hideViewed', false);
+  const [statusFilter, setStatusFilter] = useLocalStorageState<string[]>('pinger_statusFilter', []);
+  const [pinnedSortBy, setPinnedSortBy] = useLocalStorageState('pinger_pinnedSortBy', 'default');
   
   // Custom Fit Constraints
   const [customItems, setCustomItems] = useLocalStorageState('pinger_customItems', [
@@ -689,9 +693,11 @@ function App() {
         return showIgnored; // Bypass all other filters if we explicitly want to see ignored properties
       }
 
+      if (hideViewed && viewedProperties.includes(p.id)) return false;
+
       if (typeof p.score === 'number' && p.score < minScore) return false;
       if (p.price_pcm && (p.price_pcm < priceRange[0] || p.price_pcm > priceRange[1])) return false;
-      if (p.bedrooms && p.bedrooms < minBeds) return false;
+      if (p.bedrooms && (p.bedrooms < minBeds || p.bedrooms > maxBeds)) return false;
       if (minSqft > 0 && p.sqft && p.sqft < minSqft) return false;
       if (requireGarden && !p.has_garden) return false;
       if (requireLift && !p.has_lift && !p.reception_on_ground_floor) return false;
@@ -701,6 +707,11 @@ function App() {
       if (maxPricePerSqft > 0 && p.price_per_sqft && p.price_per_sqft > maxPricePerSqft) return false;
       if (maxCommuteMins > 0) {
         if (p.commute_mins !== undefined && p.commute_mins > maxCommuteMins) return false;
+      }
+
+      if (statusFilter.length > 0) {
+        const propStatus = p.user_status || 'None';
+        if (!statusFilter.includes(propStatus)) return false;
       }
 
       if (addedInLast > 0) {
@@ -725,11 +736,47 @@ function App() {
 
       return true;
     });
-  }, [scoredProperties, minScore, priceRange, minBeds, minSqft, requireGarden, requireLift, requireAC, excludeUnderfloorHeating, disabledTypes, keywordFilter, maxPricePerSqft, maxCommuteMins, addedInLast, showIgnored]);
+  }, [scoredProperties, minScore, priceRange, minBeds, maxBeds, minSqft, requireGarden, requireLift, requireAC, excludeUnderfloorHeating, disabledTypes, keywordFilter, maxPricePerSqft, maxCommuteMins, addedInLast, showIgnored, hideViewed, viewedProperties, statusFilter]);
 
   const uniqueTypes = useMemo(() => {
     return Array.from(new Set(properties.map(p => p.property_type || 'Unknown'))).sort();
   }, [properties]);
+
+  const sortedPinnedProperties = useMemo(() => {
+    const pinned = properties.filter(p => p.pinned);
+    const sorted = [...pinned];
+    if (pinnedSortBy === 'score_desc') sorted.sort((a, b) => (b.score || 0) - (a.score || 0));
+    else if (pinnedSortBy === 'price_asc') sorted.sort((a, b) => (a.price_pcm || 0) - (b.price_pcm || 0));
+    else if (pinnedSortBy === 'price_desc') sorted.sort((a, b) => (b.price_pcm || 0) - (a.price_pcm || 0));
+    else if (pinnedSortBy === 'date_desc') {
+      sorted.sort((a, b) => {
+        const da = a.listing_update ? new Date(a.listing_update).getTime() : 0;
+        const db = b.listing_update ? new Date(b.listing_update).getTime() : 0;
+        return db - da;
+      });
+    }
+    return sorted;
+  }, [properties, pinnedSortBy]);
+
+  const resetFilters = () => {
+    setMinScore(50);
+    setPriceRange([0, 99999]);
+    setMinBeds(1);
+    setMaxBeds(5);
+    setMinSqft(0);
+    setRequireGarden(false);
+    setRequireLift(false);
+    setRequireAC(false);
+    setExcludeUnderfloorHeating(false);
+    setDisabledTypes([]);
+    setKeywordFilter('');
+    setMaxPricePerSqft(0);
+    setMaxCommuteMins(0);
+    setAddedInLast(0);
+    setShowIgnored(false);
+    setStatusFilter([]);
+    setHideViewed(false);
+  };
 
   const getImages = (p: any) => {
     if (!p) return [];
@@ -859,12 +906,23 @@ function App() {
             </div>
             
             <div className="filter-group">
-              <label>Minimum Beds</label>
-              <input 
-                type="range" min="1" max="5" value={minBeds} 
-                onChange={e => setMinBeds(Number(e.target.value))} 
-              />
-              <div className="value-display">{minBeds}+ Beds</div>
+              <label>Bedrooms</label>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Min: {minBeds}</div>
+                  <input 
+                    type="range" min="1" max="5" value={minBeds} 
+                    onChange={e => setMinBeds(Math.min(Number(e.target.value), maxBeds))} 
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Max: {maxBeds === 5 ? '5+' : maxBeds}</div>
+                  <input 
+                    type="range" min="1" max="5" value={maxBeds} 
+                    onChange={e => setMaxBeds(Math.max(Number(e.target.value), minBeds))} 
+                  />
+                </div>
+              </div>
             </div>
 
             <div className="filter-group">
@@ -935,6 +993,34 @@ function App() {
             <label style={{ margin: 0, cursor: 'pointer' }}>Show Ignored Properties</label>
           </div>
 
+          <div className="toggle-group" onClick={() => setHideViewed(!hideViewed)}>
+            <div className={`toggle-switch ${hideViewed ? 'active' : ''}`}></div>
+            <label style={{ margin: 0, cursor: 'pointer' }}>Hide Viewed Properties</label>
+          </div>
+
+          <div className="filter-group">
+            <label>User Status</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+              {['Interested', 'Contacted', 'Viewing', 'Offer', 'Rejected'].map(status => (
+                <label key={status} className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={statusFilter.includes(status)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setStatusFilter([...statusFilter, status]);
+                      } else {
+                        setStatusFilter(statusFilter.filter(s => s !== status));
+                      }
+                    }} 
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  <span>{status}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
 
           <div className="filter-group">
             <label>Property Type</label>
@@ -962,8 +1048,16 @@ function App() {
 
         </div>
         
-        <div style={{ marginTop: 'auto', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-          Showing {filteredProperties.length} of {properties.length} properties
+        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <button 
+            onClick={resetFilters}
+            style={{ padding: '8px', background: 'transparent', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.85rem' }}
+          >
+            Reset Filters
+          </button>
+          <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+            Showing {filteredProperties.length} of {properties.length} properties
+          </div>
         </div>
       </div>
 
@@ -975,13 +1069,27 @@ function App() {
             <X size={24} />
           </button>
         </div>
+        <div style={{ padding: '16px 24px 0 24px' }}>
+          <GoogleSelect 
+            label="Sort By"
+            value={pinnedSortBy}
+            onChange={(val) => setPinnedSortBy(val as string)}
+            options={[
+              { value: 'default', label: 'Default' },
+              { value: 'score_desc', label: 'Score (Highest first)' },
+              { value: 'price_asc', label: 'Price (Lowest first)' },
+              { value: 'price_desc', label: 'Price (Highest first)' },
+              { value: 'date_desc', label: 'Date Added (Newest first)' }
+            ]}
+          />
+        </div>
         <div className="pinned-list">
-          {properties.filter(p => p.pinned).length === 0 ? (
+          {sortedPinnedProperties.length === 0 ? (
             <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '40px 20px' }}>
               No pinned properties yet. Click a property and tap the star icon to pin it.
             </div>
           ) : (
-            properties.filter(p => p.pinned).map(p => (
+            sortedPinnedProperties.map(p => (
               <div 
                 key={p.id} 
                 className="pinned-card" 
