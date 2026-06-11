@@ -14,7 +14,7 @@ def fetch_search_results(base_search_url: str, api_key: str, known_property_ids:
     else:
         return _fetch_rightmove_search_results(base_search_url, api_key, known_property_ids, max_unseen_properties)
 
-@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3), reraise=True)
 def _fetch_with_retry(proxy_url: str) -> requests.Response:
     response = requests.get(proxy_url, timeout=60)
     response.raise_for_status()
