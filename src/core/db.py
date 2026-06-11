@@ -113,16 +113,16 @@ def mark_evaluated(property_id: str, ignored: bool = False, score: float = 0.0, 
     except GoogleAPIError as e:
         logging.error(f"Database evaluation mark error: {e}")
 
-def find_duplicate_property(property_data: PropertyListing) -> Optional[str]:
+def find_duplicate_property(property_data: PropertyListing) -> tuple[Optional[str], Optional[dict]]:
     """
     Checks if a property with the same physical characteristics already exists.
-    Returns the ID of the duplicate if found, otherwise None.
+    Returns a tuple of (duplicate_id, duplicate_data) if found, otherwise (None, None).
     """
     if not db:
-        return None
+        return None, None
     
     if property_data.latitude is None or property_data.longitude is None:
-        return None
+        return None, None
         
     try:
         # Query by price to narrow down. We don't use multiple where() clauses to avoid composite index requirements.
@@ -146,9 +146,9 @@ def find_duplicate_property(property_data: PropertyListing) -> Optional[str]:
             
             if doc_lat is not None and doc_lng is not None:
                 if abs(doc_lat - property_data.latitude) < 0.002 and abs(doc_lng - property_data.longitude) < 0.002:
-                    return doc.id
+                    return doc.id, data
                     
-        return None
+        return None, None
     except GoogleAPIError as e:
         logging.error(f"Database duplicate check error: {e}")
         return None

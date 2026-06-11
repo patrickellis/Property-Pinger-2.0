@@ -62,6 +62,12 @@ def check_noise_pollution(lat: float, lng: float) -> bool:
     url = "https://overpass-api.de/api/interpreter"
     
     try:
+        import time
+        import random
+        # Add random jitter (0.5 to 2.5 seconds) to prevent 429 Too Many Requests
+        # from the public Overpass API when multiple threads run concurrently
+        time.sleep(random.uniform(0.5, 2.5))
+        
         headers = {"User-Agent": "PropertyPingerBot/1.0"}
         response = requests.post(url, data={'data': query}, headers=headers, timeout=10)
         response.raise_for_status()

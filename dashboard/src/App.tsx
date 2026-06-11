@@ -3,7 +3,7 @@ import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
 import { MapContainer, TileLayer, Marker, Tooltip, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { db } from './firebase';
-import { X, CheckCircle2, XCircle, Map as MapIcon, ChevronLeft, ChevronRight, Pin, Search, List, Globe, Clock, MapPin, ExternalLink, MessageSquare, Settings, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, CheckCircle2, XCircle, Map as MapIcon, ChevronLeft, ChevronRight, Pin, Search, List, Globe, Clock, MapPin, ExternalLink, MessageSquare, Settings, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
 import pois from './pois.json';
@@ -1445,6 +1445,12 @@ function App() {
                           <ExternalLink size={20} />
                         </div>
                         <span>Rightmove</span>
+                      </button>
+                      <button className="drawer-action-item" onClick={() => updatePropertyDetails(activeProp.id, { ignored: !activeProp.ignored })}>
+                        <div className="drawer-action-icon-wrapper" style={{ background: activeProp.ignored ? '#fce8e6' : '#f1f3f4', color: activeProp.ignored ? '#d93025' : '#5f6368' }}>
+                          <Trash2 size={20} fill={activeProp.ignored ? 'currentColor' : 'none'} />
+                        </div>
+                        <span>{activeProp.ignored ? 'Restore' : 'Ignore'}</span>
                       </button>
                     </div>
 

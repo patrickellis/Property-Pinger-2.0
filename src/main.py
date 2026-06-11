@@ -82,9 +82,37 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         if not property_data:
             return
             
-        duplicate_id = find_duplicate_property(property_data)
-        if duplicate_id:
+        duplicate_id, existing_data = find_duplicate_property(property_data)
+        if duplicate_id and existing_data:
             logging.info(f"[{property_id}] Skipping - duplicate of {duplicate_id}")
+            
+            updated_existing = False
+            existing_raw = existing_data.get('raw_data', {})
+            
+            # Enrich existing duplicate with missing floorplans
+            if not existing_raw.get('floorplans') and property_data.floorplans:
+                existing_raw['floorplans'] = property_data.floorplans
+                updated_existing = True
+                logging.info(f"[{duplicate_id}] Enriched with floorplan from duplicate {property_id}")
+                
+            # Enrich existing duplicate with better images
+            if len(property_data.images) > len(existing_raw.get('images', [])):
+                existing_raw['images'] = property_data.images
+                updated_existing = True
+                logging.info(f"[{duplicate_id}] Enriched with {len(property_data.images)} images from duplicate {property_id}")
+                
+            if updated_existing:
+                from google.cloud import firestore
+                from core.db import collection_ref
+                try:
+                    # Update raw_data and trigger re-evaluation
+                    collection_ref.document(str(duplicate_id)).update({
+                        'raw_data': existing_raw,
+                        'evaluated_at': firestore.DELETE_FIELD
+                    })
+                except Exception as e:
+                    logging.error(f"Failed to merge duplicate data: {e}")
+
             property_data.user_note = f"Duplicate of {duplicate_id}"
             mark_evaluated(property_id, ignored=True, property_data=property_data)
             return

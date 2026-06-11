@@ -6,8 +6,8 @@ service cloud.firestore {
       // Anyone can read property data
       allow read: if true;
       
-      // Only allow updating the 'pinned' field, prevent creating/deleting or modifying other fields
-      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned']);
+      // Only allow updating the CRM fields, prevent creating/deleting or modifying other fields
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned', 'user_status', 'user_note', 'ignored']);
       allow create, delete: if false;
     }
     

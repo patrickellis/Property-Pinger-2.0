@@ -6,6 +6,7 @@ def passes_dealbreakers(property_data: PropertyListing, config: dict) -> tuple[b
     """
     Evaluates zero-cost, hard constraints before we spend money on Gemini or Maps APIs.
     """
+    import re
     db = config["dealbreakers"]
     prop_id = property_data.id
 
@@ -26,6 +27,28 @@ def passes_dealbreakers(property_data: PropertyListing, config: dict) -> tuple[b
 
     if property_data.furnishing not in db.get("required_furnishing", ["unknown"]):
         reason = f"Furnishing '{property_data.furnishing}' not in required list."
+        logging.info(f"[{prop_id}] Rejected: {reason}")
+        return False, reason
+
+    desc = property_data.description.lower() if property_data.description else ""
+
+    if re.search(r'\b(short let|short-let|shortlet|holiday let|airbnb)\b', desc):
+        reason = "Description indicates a short let."
+        logging.info(f"[{prop_id}] Rejected: {reason}")
+        return False, reason
+
+    if re.search(r'\b(student|students only|student accommodation|hmo|house share|room to rent)\b', desc) and not re.search(r'\b(suitable for professionals|not a hmo)\b', desc):
+        reason = "Description indicates student accommodation or HMO."
+        logging.info(f"[{prop_id}] Rejected: {reason}")
+        return False, reason
+
+    if re.search(r'\b(retirement|over 55s|over 60s|over-55|over-60)\b', desc):
+        reason = "Description indicates retirement property."
+        logging.info(f"[{prop_id}] Rejected: {reason}")
+        return False, reason
+        
+    if re.search(r'\b(cash buyers only|cash buyer only)\b', desc):
+        reason = "Description indicates cash buyers only."
         logging.info(f"[{prop_id}] Rejected: {reason}")
         return False, reason
 
@@ -189,7 +212,7 @@ def calculate_match_score(
     if ts_weight != 0 and (property_data.sqft or 0) > 0:
         opt_sqft = scoring_params.get("optimal_total_sqft", 1500)
         size_ratio = min(1.0, property_data.sqft / opt_sqft)
-        size_score = ts_weight * size_ratio
+        size_score = ts_weight * ((size_ratio - 0.5) * 2)
         score += size_score
         breakdown["scorecard"]["total_size"] = round(size_score, 1)
 
@@ -207,16 +230,23 @@ def calculate_match_score(
     hc_max_scale = scoring_params.get("high_ceiling_max_scale_m", 3.3)
     
     hc_weight = weights.get("high_ceilings", 0)
-    if hc_weight != 0 and ceiling_height > hc_threshold:
-        # Scale bonus proportionally
-        scale_range = hc_max_scale - hc_threshold
-        if scale_range <= 0:
-            ratio = 1.0
+    if hc_weight != 0 and ceiling_height > 0:
+        if ceiling_height >= hc_threshold:
+            scale_range = hc_max_scale - hc_threshold
+            if scale_range <= 0:
+                ratio = 1.0
+            else:
+                ratio = min(1.0, (ceiling_height - hc_threshold) / scale_range)
+            hc_score = hc_weight * ratio
+            breakdown["pros"].append(f"High Ceilings ({ceiling_height}m)")
         else:
-            ratio = min(1.0, (ceiling_height - hc_threshold) / scale_range)
-        hc_score = hc_weight * ratio
+            low_threshold = 2.4
+            if ceiling_height < low_threshold:
+                ratio = min(1.0, (low_threshold - ceiling_height) / 0.4)
+                hc_score = -hc_weight * ratio
+                breakdown["cons"].append(f"Low Ceilings ({ceiling_height}m)")
+        
         score += hc_score
         breakdown["scorecard"]["high_ceilings"] = round(hc_score, 1)
-        breakdown["pros"].append(f"High Ceilings ({ceiling_height}m)")
 
     return round(score, 2), breakdown
