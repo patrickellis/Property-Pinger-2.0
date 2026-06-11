@@ -120,6 +120,109 @@ def extract_rightmove_data_via_api(url: str, api_key: str) -> Optional[PropertyL
         )
         return None
 
+
+def _extract_zoopla_app_router_fallback(soup: BeautifulSoup, html: str, url: str) -> Optional[PropertyListing]:
+    try:
+        # Extract ID from URL
+        url_match = re.search(r'/details/(\d+)', url)
+        listing_id = url_match.group(1) if url_match else str(hash(url))
+
+        # Price
+        price_pcm = "0"
+        price_elem = soup.find(string=re.compile(r"£[0-9,]+ pcm"))
+        if price_elem:
+            p_match = re.search(r"£([0-9,]+) pcm", price_elem)
+            if p_match:
+                price_pcm = p_match.group(1).replace(",", "")
+
+        # Beds and Baths
+        bedrooms = 0
+        beds_elem = soup.find(string=re.compile(r"([0-9]+) beds?"))
+        if beds_elem:
+            b_match = re.search(r"([0-9]+) beds?", beds_elem)
+            if b_match:
+                bedrooms = int(b_match.group(1))
+                
+        bathrooms = 0
+        baths_elem = soup.find(string=re.compile(r"([0-9]+) baths?"))
+        if baths_elem:
+            b_match = re.search(r"([0-9]+) baths?", baths_elem)
+            if b_match:
+                bathrooms = int(b_match.group(1))
+
+        # Coordinates
+        lat, lng = None, None
+        coord_match = re.search(r'"latitude"[^\w]+([0-9.-]+).*?"longitude"[^\w]+([0-9.-]+)', html, re.IGNORECASE | re.DOTALL)
+        if coord_match:
+            lat = float(coord_match.group(1))
+            lng = float(coord_match.group(2))
+        else:
+            coord_match2 = re.search(r'latitude[^\w]+([0-9.-]+).*?longitude[^\w]+([0-9.-]+)', html, re.IGNORECASE | re.DOTALL)
+            if coord_match2:
+                lat = float(coord_match2.group(1))
+                lng = float(coord_match2.group(2))
+
+        # Title / Display Address
+        display_address = soup.title.string.split(',')[0].strip() if soup.title else ""
+        address_elem = soup.find("address")
+        if address_elem:
+            display_address = address_elem.text.strip()
+            
+        postcode = ""
+        
+        # Images
+        images = []
+        img_matches = list(set(re.findall(r"(https://lid\.zoocdn\.com/u/[^/]+/[^/]+/[^\"]+\.jpg)", html)))
+        if not img_matches:
+            img_matches = list(set(re.findall(r"(https://lid\.zoocdn\.com/[^\"]+\.jpg)", html)))
+            
+        if img_matches:
+            # Prefer 1024/768 if possible, but keep whatever regex found
+            images = [img.replace("480/360", "1024/768") for img in img_matches]
+
+        # Description
+        detailed_desc = ""
+        desc_elem = soup.find(id="detailed-desc")
+        if desc_elem:
+            detailed_desc = desc_elem.text.strip()
+
+        property_type = "Room" if "room" in (soup.title.string.lower() if soup.title else "") else "Unknown"
+
+        cleaned_data = {
+            "id": listing_id,
+            "url": url,
+            "status": {},
+            "price_pcm": price_pcm,
+            "bedrooms": bedrooms,
+            "bathrooms": bathrooms,
+            "property_type": property_type,
+            "display_address": display_address,
+            "postcode": postcode,
+            "uk_country": "GB",
+            "latitude": lat,
+            "longitude": lng,
+            "nearest_stations": [],
+            "has_garden": "garden" in detailed_desc.lower(),
+            "description": detailed_desc,
+            "furnishing": "furnished" if "furnished" in detailed_desc.lower() else "unknown",
+            "listing_update": "Date Unknown",
+            "images": images,
+            "floorplans": []
+        }
+
+        # Validate with Pydantic
+        # If title has "Captcha" in it, it might actually be a captcha
+        if soup.title and "captcha" in soup.title.string.lower():
+            logging.error(f"Zoopla hit a Captcha for {url}")
+            return None
+
+        return PropertyListing(**cleaned_data)
+        
+    except Exception as e:
+        import traceback
+        logging.error(f"Error parsing Zoopla App Router fallback for {url}: {e}\n{traceback.format_exc()}")
+        return None
+
 @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
 def extract_zoopla_data_via_api(url: str, api_key: str) -> Optional[PropertyListing]:
     encoded_target_url = quote(url)
@@ -136,8 +239,8 @@ def extract_zoopla_data_via_api(url: str, api_key: str) -> Optional[PropertyList
     # 1. Extract __NEXT_DATA__ script
     next_data_script = soup.find("script", id="__NEXT_DATA__")
     if not next_data_script or not next_data_script.string:
-        logging.warning(f"__NEXT_DATA__ not found for {url}. Captcha hit or listing removed.")
-        return None
+        logging.info(f"__NEXT_DATA__ not found for {url}. Attempting Next.js App Router fallback parsing...")
+        return _extract_zoopla_app_router_fallback(soup, response.text, url)
 
     try:
         raw_data = json.loads(next_data_script.string)

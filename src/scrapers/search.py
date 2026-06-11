@@ -5,12 +5,20 @@ from urllib.parse import quote, urljoin, urlparse, urlencode, parse_qsl, urlunpa
 import logging
 from tenacity import retry, wait_exponential, stop_after_attempt
 
+from tenacity import retry, wait_exponential, stop_after_attempt
+
 @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
 def fetch_search_results(base_search_url: str, api_key: str, known_property_ids: set[str] = None, max_unseen_properties: int = 50) -> list[str]:
     if "zoopla.co.uk" in base_search_url:
         return _fetch_zoopla_search_results(base_search_url, api_key, known_property_ids, max_unseen_properties)
     else:
         return _fetch_rightmove_search_results(base_search_url, api_key, known_property_ids, max_unseen_properties)
+
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
+def _fetch_with_retry(proxy_url: str) -> requests.Response:
+    response = requests.get(proxy_url, timeout=60)
+    response.raise_for_status()
+    return response
 
 def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_property_ids: set[str] = None, max_unseen_properties: int = 50) -> list[str]:
     """
@@ -41,8 +49,7 @@ def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_prope
         proxy_url = f"http://api.scraperapi.com?api_key={api_key}&url={encoded_url}&ultra_premium=true"
         
         try:
-            response = requests.get(proxy_url, timeout=45)
-            response.raise_for_status()
+            response = _fetch_with_retry(proxy_url)
         except requests.RequestException as e:
             logging.error(f"Failed to fetch Zoopla search page {page}: {e}")
             break
@@ -127,8 +134,7 @@ def _fetch_rightmove_search_results(base_search_url: str, api_key: str, known_pr
         proxy_url = f"http://api.scraperapi.com?api_key={api_key}&url={encoded_url}&premium=true"
         
         try:
-            response = requests.get(proxy_url, timeout=45)
-            response.raise_for_status()
+            response = _fetch_with_retry(proxy_url)
         except requests.RequestException as e:
             logging.error(f"Failed to fetch Rightmove search page {page}: {e}")
             break
