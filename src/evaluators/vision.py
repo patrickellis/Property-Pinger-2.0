@@ -6,6 +6,7 @@ from google import genai
 from google.genai import errors
 from PIL import Image
 from pydantic import BaseModel, Field
+from core.models import FloorplanGraph
 from tenacity import retry, wait_exponential, stop_after_attempt
 
 # Initialize the client. GCP automatically injects GEMINI_API_KEY from Secret Manager.
@@ -73,6 +74,10 @@ class FloorplanDetails(BaseModel):
     )
     master_bedroom_width_m: float = Field(
         description="The shortest dimension of the largest bedroom in meters. 0.0 if not found."
+    )
+    floorplan_graph: FloorplanGraph | None = Field(
+        default=None,
+        description="A full graph representation of the floorplan layout, detailing rooms and doors."
     )
 
 
@@ -153,6 +158,7 @@ def extract_floorplan_details(floorplan_urls: list[str], description: str) -> Fl
         has_lift=False,
         master_bedroom_length_m=0.0,
         master_bedroom_width_m=0.0,
+        floorplan_graph=None,
     )
 
     if not floorplan_urls:
@@ -169,6 +175,12 @@ def extract_floorplan_details(floorplan_urls: list[str], description: str) -> Fl
     Examine this floorplan and the property description below. 
     Extract the details according to the provided schema.
     If you find dimensions in feet/inches, please convert them to meters.
+
+    CRITICAL: You must also extract the full floorplan graph (rooms and doors).
+    1. Identify every distinct room, hallway, or space. Estimate its length and width in meters. If the dimensions are not explicitly stated but you can estimate them visually compared to other rooms, do so.
+    2. Identify all doors, openings, or connections between these spaces. Create DoorEdge items connecting the 'from_room' to the 'to_room'. Make sure the names match exactly.
+    3. Identify the main entrance room/hallway from the outside.
+    4. For each room, identify the orientation of any external windows based on the compass rose (if present). If there is no compass rose, assume North is at the top of the image. Add a Window object for each window found.
 
     Agent Description for context: {description}
     """

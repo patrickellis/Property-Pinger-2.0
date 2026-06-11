@@ -1,12 +1,33 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { MapContainer, TileLayer, Marker, Tooltip } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Tooltip, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { db } from './firebase';
-import { X, CheckCircle2, XCircle, Map as MapIcon, ChevronLeft, ChevronRight, Pin, Search, List } from 'lucide-react';
+import { X, CheckCircle2, XCircle, Map as MapIcon, ChevronLeft, ChevronRight, Pin, Search, List, Globe, Clock, MapPin, ExternalLink, MessageSquare, Settings, ChevronDown, ChevronUp } from 'lucide-react';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
 import pois from './pois.json';
+
+interface RoomNode {
+  name: string;
+  length_m: number;
+  width_m: number;
+  room_type: string;
+  windows?: { orientation: string }[];
+  sunlight_hours?: number;
+}
+
+interface DoorEdge {
+  from_room: string;
+  to_room: string;
+  width_m: number;
+}
+
+interface FloorplanGraph {
+  rooms: RoomNode[];
+  doors: DoorEdge[];
+  entrance_room?: string;
+}
 
 interface Property {
   id: string;
@@ -36,6 +57,7 @@ interface Property {
     scorecard?: Record<string, number>;
   };
   raw_data?: any;
+  floorplan_graph?: FloorplanGraph;
 }
 
 const NoteEditor = ({ propId, initialNote, onSave }: { propId: string, initialNote: string, onSave: (id: string, note: string) => void }) => {
@@ -63,13 +85,21 @@ const getScoreColor = (score: number, viewed: boolean = false) => {
   return `hsla(${hue}, 85%, 50%, ${viewed ? 0.4 : 1})`;
 };
 
-const createCustomIcon = (score: number, ignored: boolean, pinned: boolean = false, fresh: boolean = false, viewed: boolean = false) => {
-  const bgColor = ignored ? 'var(--danger)' : getScoreColor(score, viewed);
+const createCustomIcon = (score: number, ignored: boolean, pinned: boolean = false, fresh: boolean = false, viewed: boolean = false, isHovered: boolean = false) => {
+  const bgColor = pinned ? '#ff4f70' : (ignored ? 'var(--danger)' : getScoreColor(score, viewed));
+  const size = pinned && !isHovered ? 24 : (isHovered && pinned ? 34 : 36);
+  const fontSize = pinned ? size * 0.6 : 14;
+
+  const anchorY = pinned ? size / 2 : size * 1.207;
+  const heartSvg = `<svg viewBox="0 0 24 24" fill="white" width="65%" height="65%" style="margin-top: 1px;"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>`;
+
   return L.divIcon({
-    className: `custom-marker ${ignored ? 'ignored' : ''} ${pinned ? 'pinned' : ''} ${fresh ? 'fresh' : ''} ${viewed ? 'viewed' : ''}`,
-    html: `<div class="custom-marker-inner" style="background-color: ${bgColor};">${pinned ? '⭐' : Math.round(score)}</div>`,
-    iconSize: [36, 36],
-    iconAnchor: [18, 18],
+    className: `custom-marker ${ignored ? 'ignored' : ''} ${pinned ? 'pinned' : ''} ${fresh ? 'fresh' : ''} ${viewed && !pinned ? 'viewed' : ''} ${isHovered ? 'hovered' : ''}`,
+    html: `<div class="custom-marker-inner" style="background-color: ${bgColor}; width: ${size}px; height: ${size}px;">
+             <span class="custom-marker-content" style="font-size: ${fontSize}px; ${pinned ? 'width: 100%; height: 100%;' : ''}">${pinned ? heartSvg : Math.round(score)}</span>
+           </div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, anchorY],
   });
 };
 
@@ -96,6 +126,71 @@ const normalizeToISO8601 = (dateStr?: string) => {
   }
   
   return dateStr; // fallback
+};
+
+const validateFit = (graph: FloorplanGraph | undefined, itemLength: number, itemWidth: number) => {
+  if (!graph || !graph.rooms || graph.rooms.length === 0) return { fits: false, reason: "No floorplan graph available." };
+
+  const entrance = graph.entrance_room || graph.rooms[0].name;
+  const startNode = graph.rooms.find(r => r.name === entrance);
+  if (!startNode) return { fits: false, reason: "Entrance not found in floorplan." };
+
+  const minItemDim = Math.min(itemLength, itemWidth);
+  const maxItemDim = Math.max(itemLength, itemWidth);
+  const itemArea = itemLength * itemWidth;
+
+  const reachable = new Set<string>();
+  const queue = [entrance];
+  
+  const adjList = new Map<string, Array<{to: string, width: number}>>();
+  graph.rooms.forEach(r => adjList.set(r.name, []));
+  
+  graph.doors.forEach(d => {
+    if (adjList.has(d.from_room)) {
+      adjList.get(d.from_room)!.push({ to: d.to_room, width: d.width_m });
+    }
+    if (adjList.has(d.to_room)) {
+      adjList.get(d.to_room)!.push({ to: d.from_room, width: d.width_m });
+    }
+  });
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    if (reachable.has(curr)) continue;
+    reachable.add(curr);
+
+    const neighbors = adjList.get(curr) || [];
+    for (const edge of neighbors) {
+      if (edge.width >= minItemDim && !reachable.has(edge.to)) {
+        queue.push(edge.to);
+      }
+    }
+  }
+
+  const reception = graph.rooms.find(r => r.room_type === 'reception');
+  if (!reception) return { fits: false, reason: "No reception room identified.", reachableRooms: Array.from(reachable) };
+
+  if (!reachable.has(reception.name)) {
+    return { fits: false, reason: `Reception room (${reception.name}) is unreachable. A door or hallway is too narrow for ${minItemDim}m.`, reachableRooms: Array.from(reachable) };
+  }
+
+  const roomMinDim = Math.min(reception.length_m, reception.width_m);
+  const roomMaxDim = Math.max(reception.length_m, reception.width_m);
+  const roomArea = reception.length_m * reception.width_m;
+
+  if (roomMinDim < minItemDim || roomMaxDim < maxItemDim) {
+    return { fits: false, reason: `Reception room (${reception.name}) dimensions (${reception.length_m}x${reception.width_m}m) are too small.`, reachableRooms: Array.from(reachable) };
+  }
+  
+  if (roomArea < itemArea * 3) {
+      return { fits: false, reason: `Reception room (${reception.name}) does not have enough free space/wall space for this item.`, reachableRooms: Array.from(reachable)};
+  }
+
+  return { 
+    fits: true, 
+    reason: `Item fits! Path from entrance to ${reception.name} is clear.`,
+    reachableRooms: Array.from(reachable)
+  };
 };
 
 const isFresh = (isoDateStr?: string) => {
@@ -134,11 +229,16 @@ const formatListedDate = (dateStr?: string) => {
 };
 
 const createPoiIcon = (type: string) => {
+  const size = 24;
+  const pinSvg = `<svg viewBox="0 0 24 24" fill="white" width="60%" height="60%"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>`;
+  
   return L.divIcon({
     className: `custom-marker poi-marker ${type}`,
-    html: `<div class="custom-marker-inner">📍</div>`,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12],
+    html: `<div class="custom-marker-inner" style="width: ${size}px; height: ${size}px;">
+             <span class="custom-marker-content" style="width: 100%; height: 100%;">${pinSvg}</span>
+           </div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
   });
 };
 
@@ -181,18 +281,128 @@ function useLocalStorageState<T>(key: string, defaultValue: T): [T, React.Dispat
   return [state, setState];
 }
 
+const StarRating = ({ score100 }: { score100: number }) => {
+  const score5 = (Math.max(0, Math.min(100, score100)) / 100) * 5;
+  const stars = [];
+  for (let i = 1; i <= 5; i++) {
+    let fillPct = 0;
+    if (score5 >= i) fillPct = 100;
+    else if (score5 > i - 1) fillPct = (score5 - (i - 1)) * 100;
+    
+    stars.push(
+      <div key={i} style={{ position: 'relative', display: 'inline-block', width: '14px', height: '14px', marginRight: '2px' }}>
+        <svg viewBox="0 0 24 24" fill="#e8eaed" width="100%" height="100%" style={{ position: 'absolute', top: 0, left: 0 }}>
+          <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+        </svg>
+        <svg viewBox="0 0 24 24" fill="#fbbc04" width="100%" height="100%" style={{ position: 'absolute', top: 0, left: 0, clipPath: `inset(0 ${100 - fillPct}% 0 0)` }}>
+          <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+        </svg>
+      </div>
+    );
+  }
+  return <div style={{ display: 'flex', alignItems: 'center' }}>{stars}</div>;
+};
+
+const getScoreContext = (key: string, prop: any, w: any, p: any, priceRange: number[]) => {
+  switch(key) {
+    case 'total_size':
+      return `Measured Size: ${prop.sqft ? prop.sqft + ' sqft' : 'Unknown'}. Target: ${p.optimal_total_sqft} sqft. Max Weight: ${w.total_size}.`;
+    case 'price':
+      return `Price: £${prop.price_pcm} pcm. Max Budget: ${priceRange[1] > 90000 ? 'No Limit' : '£' + priceRange[1]}. Max Weight: ${w.price}.`;
+    case 'commute':
+      return `Measured Commute: ${prop.commute_mins ? Math.ceil(prop.commute_mins) + ' mins' : 'Unknown'}. Max Weight: ${w.commute}.`;
+    case 'bedroom_size':
+      return `Target: ${p.bedroom_optimal_area_sqm} sqm. Max Weight: ${w.bedroom_size}.`;
+    case 'natural_light':
+      return `Estimated based on orientation/windows. Max Weight: ${w.natural_light}.`;
+    case 'period_features':
+      return `Detected from description. Max Weight: ${w.period_features}.`;
+    case 'sash_windows':
+      return `Detected from description. Max Weight: ${w.sash_windows}.`;
+    case 'garden':
+      return `Detected from description. Max Weight: ${w.garden}.`;
+    case 'high_ceilings':
+      return `Target > ${p.high_ceiling_threshold_m}m. Max Weight: ${w.high_ceilings}.`;
+    default:
+      if (key.startsWith('penalty_')) {
+        return `Penalty deduction applied based on listing analysis.`;
+      }
+      return '';
+  }
+};
+
+const GoogleSelect = ({ label, value, options, onChange }: {
+  label: string, 
+  value: string | number, 
+  options: {value: string | number, label: string}[], 
+  onChange: (val: string | number) => void
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selectedLabel = options.find(o => o.value === value)?.label || value;
+
+  return (
+    <div className={`g-select-container ${isOpen ? 'open' : ''}`} ref={containerRef}>
+      <div className="g-select-button" onClick={() => setIsOpen(!isOpen)}>
+        <div className="g-select-content">
+          <div className="g-select-label">{label}</div>
+          <div className="g-select-value">{selectedLabel}</div>
+        </div>
+        <div className="g-select-caret">
+          {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </div>
+      </div>
+      {isOpen && (
+        <div className="g-select-dropdown">
+          {options.map(opt => (
+            <div 
+              key={opt.value} 
+              className={`g-select-option ${opt.value === value ? 'selected' : ''}`}
+              onClick={() => {
+                onChange(opt.value);
+                setIsOpen(false);
+              }}
+            >
+              {opt.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+function MapEvents({ onClick }: { onClick: () => void }) {
+  useMapEvents({
+    click: () => {
+      onClick();
+    },
+  });
+  return null;
+}
+
 function App() {
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
   // Dynamic Scoring Weights
-  const [showWeightsPanel, setShowWeightsPanel] = useLocalStorageState('pinger_showWeightsPanel', false);
+  const [showSettingsPanel, setShowSettingsPanel] = useLocalStorageState('pinger_showSettingsPanel', false);
   const [weights, setWeights] = useLocalStorageState('pinger_weights', {
     price: 15,
     commute: 15,
     total_size: 10,
-    bedroom_size: 10,
     natural_light: 20,
     period_features: 15,
     sash_windows: 5,
@@ -200,17 +410,19 @@ function App() {
     high_ceilings: 15
   });
 
+  const [penalties, setPenalties] = useLocalStorageState('pinger_penalties', {
+    not_ground_floor_reception: -15,
+    wide_angle_distortion: -10,
+    poor_epc_rating: -30,
+    noisy_location: -20
+  });
+
   const [scoringParams, setScoringParams] = useLocalStorageState('pinger_scoringParams', {
     optimal_total_sqft: 1500,
-    bedroom_optimal_area_sqm: 16.0,
-    bedroom_min_width_m: 0.0,
-    bedroom_min_length_m: 0.0,
-    reception_min_width_m: 0.0,
-    reception_min_length_m: 2.14,
     high_ceiling_threshold_m: 2.7,
     high_ceiling_max_scale_m: 3.3
   });
-  const [showScoringParamsPanel, setShowScoringParamsPanel] = useLocalStorageState('pinger_showScoringParamsPanel', false);
+
 
   // Filters
   const [minScore, setMinScore] = useLocalStorageState('pinger_minScore', 50);
@@ -224,15 +436,24 @@ function App() {
   const [disabledTypes, setDisabledTypes] = useLocalStorageState<string[]>('pinger_disabledTypes', []);
   const [keywordFilter, setKeywordFilter] = useLocalStorageState('pinger_keywordFilter', '');
   const [showPinnedPanel, setShowPinnedPanel] = useLocalStorageState('pinger_showPinnedPanel', false);
+  const [showItemPanel, setShowItemPanel] = useLocalStorageState('pinger_showItemPanel', false);
   const [maxPricePerSqft, setMaxPricePerSqft] = useLocalStorageState('pinger_maxPricePerSqft', 0);
   const [maxCommuteMins, setMaxCommuteMins] = useLocalStorageState('pinger_maxCommuteMins', 0);
   const [addedInLast, setAddedInLast] = useLocalStorageState('pinger_addedInLast', 0);
   const [showIgnored, setShowIgnored] = useLocalStorageState('pinger_showIgnored', false);
   const [viewedProperties, setViewedProperties] = useLocalStorageState<string[]>('pinger_viewedProperties', []);
   
+  // Custom Fit Constraints
+  const [customItems, setCustomItems] = useLocalStorageState('pinger_customItems', [
+    { id: '1', name: 'Grand Piano', length: 2.0, width: 1.5 }
+  ]);
+  
   // Selected Property
   const [selectedProp, setSelectedProp] = useState<Property | null>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [hoveredPinnedId, setHoveredPinnedId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'Overview' | 'Scorecard'>('Overview');
+  const [isFloorplanExpanded, setIsFloorplanExpanded] = useState(false);
 
   useEffect(() => {
     const fetchProps = async () => {
@@ -318,7 +539,8 @@ function App() {
               user_note: data.user_note || '',
               user_status: data.user_status || 'None',
               price_per_sqft: pps,
-              commute_mins: commute_mins
+              commute_mins: commute_mins,
+              floorplan_graph: data.floorplan_graph || data.raw_data?.floorplan_graph
             });
           }
         });
@@ -343,14 +565,13 @@ function App() {
       const newScorecard = { ...sc };
       
       // Default backend weights
-      const DW = { price: 15, commute: 15, total_size: 10, bedroom_size: 10, natural_light: 20, period_features: 15, sash_windows: 5, garden: 10, high_ceilings: 15 };
+      const DW = { price: 15, commute: 15, total_size: 10, natural_light: 20, period_features: 15, sash_windows: 5, garden: 10, high_ceilings: 15 };
       
       // Calculate total user weight to normalize the scores out of 100
       const safeWeights = {
-        price: weights.price ?? DW.price,
+        price: 15, // Fixed price weight
         commute: weights.commute ?? DW.commute,
         total_size: weights.total_size ?? DW.total_size,
-        bedroom_size: weights.bedroom_size ?? DW.bedroom_size,
         natural_light: weights.natural_light ?? DW.natural_light,
         period_features: weights.period_features ?? DW.period_features,
         sash_windows: weights.sash_windows ?? DW.sash_windows,
@@ -360,31 +581,14 @@ function App() {
       const totalWeight = Object.values(safeWeights).reduce((sum, w) => sum + w, 0);
       
       if (totalWeight > 0) {
-        // --- Dynamic Score Components Based on Scoring Parameters ---
+        // Total Size
         let sc_total_size = 0;
         if ((p.sqft || 0) > 0) {
           const size_ratio = Math.min(1.0, p.sqft! / scoringParams.optimal_total_sqft);
           sc_total_size = DW.total_size * size_ratio;
         }
-        newScorecard['total_size'] = Number(sc_total_size.toFixed(1));
-
-        let sc_bed_score = 0;
-        const bedroom_length = p.raw_data?.master_bedroom_length_m || 0.0;
-        const bedroom_width = p.raw_data?.master_bedroom_width_m || 0.0;
-        if (bedroom_length > 0) {
-          if (bedroom_width > 0) {
-             if (bedroom_length >= scoringParams.bedroom_min_length_m && bedroom_width >= scoringParams.bedroom_min_width_m) {
-                 const area = bedroom_length * bedroom_width;
-                 const bed_ratio = Math.min(1.0, area / scoringParams.bedroom_optimal_area_sqm);
-                 sc_bed_score = DW.bedroom_size * bed_ratio;
-             }
-          } else {
-             // Legacy
-             sc_bed_score = DW.bedroom_size * Math.min(1.0, bedroom_length / 4.0);
-          }
-        }
-        newScorecard['bedroom_size'] = Number(sc_bed_score.toFixed(1));
         
+        // High Ceilings
         let sc_high_ceilings = 0;
         const ceiling_height = p.raw_data?.max_ceiling_height_m || 0.0;
         if (ceiling_height > scoringParams.high_ceiling_threshold_m) {
@@ -392,49 +596,78 @@ function App() {
             const ratio = scale_range > 0 ? Math.min(1.0, (ceiling_height - scoringParams.high_ceiling_threshold_m) / scale_range) : 1.0;
             sc_high_ceilings = DW.high_ceilings * ratio;
         }
-        newScorecard['high_ceilings'] = Number(sc_high_ceilings.toFixed(1));
 
         // Normalize the score contributions to be out of 100 instead of unbounded
-        if (sc.price !== undefined) dynamicScore += (sc.price / Math.max(1, DW.price)) * (safeWeights.price / totalWeight) * 100;
-        // Commute score can be negative, scaling applies the same
-        if (sc.commute !== undefined) dynamicScore += (sc.commute / Math.max(1, DW.commute)) * (safeWeights.commute / totalWeight) * 100;
+        if (sc.price !== undefined) {
+          const val = (sc.price / Math.max(1, DW.price)) * (safeWeights.price / totalWeight) * 100;
+          dynamicScore += val;
+          newScorecard['price'] = Number(val.toFixed(1));
+        }
+        if (sc.commute !== undefined) {
+          const val = (sc.commute / Math.max(1, DW.commute)) * (safeWeights.commute / totalWeight) * 100;
+          dynamicScore += val;
+          newScorecard['commute'] = Number(val.toFixed(1));
+        }
         
-        dynamicScore += DW.total_size > 0 ? (sc_total_size / DW.total_size) * (safeWeights.total_size / totalWeight) * 100 : 0;
-        dynamicScore += DW.bedroom_size > 0 ? (sc_bed_score / DW.bedroom_size) * (safeWeights.bedroom_size / totalWeight) * 100 : 0;
-        dynamicScore += DW.high_ceilings > 0 ? (sc_high_ceilings / DW.high_ceilings) * (safeWeights.high_ceilings / totalWeight) * 100 : 0;
+        const norm_total_size = DW.total_size > 0 ? (sc_total_size / DW.total_size) * (safeWeights.total_size / totalWeight) * 100 : 0;
+        dynamicScore += norm_total_size;
+        newScorecard['total_size'] = Number(norm_total_size.toFixed(1));
 
-        if (sc.natural_light !== undefined) dynamicScore += (sc.natural_light / Math.max(1, DW.natural_light)) * (safeWeights.natural_light / totalWeight) * 100;
-        if (sc.period_features !== undefined) dynamicScore += DW.period_features > 0 ? (sc.period_features / DW.period_features) * (safeWeights.period_features / totalWeight) * 100 : 0;
-        if (sc.sash_windows !== undefined) dynamicScore += DW.sash_windows > 0 ? (sc.sash_windows / DW.sash_windows) * (safeWeights.sash_windows / totalWeight) * 100 : 0;
-        if (sc.garden !== undefined) dynamicScore += DW.garden > 0 ? (sc.garden / DW.garden) * (safeWeights.garden / totalWeight) * 100 : 0;
+        const norm_hc = DW.high_ceilings > 0 ? (sc_high_ceilings / DW.high_ceilings) * (safeWeights.high_ceilings / totalWeight) * 100 : 0;
+        dynamicScore += norm_hc;
+        newScorecard['high_ceilings'] = Number(norm_hc.toFixed(1));
+
+        if (sc.natural_light !== undefined) {
+          const val = (sc.natural_light / Math.max(1, DW.natural_light)) * (safeWeights.natural_light / totalWeight) * 100;
+          dynamicScore += val;
+          newScorecard['natural_light'] = Number(val.toFixed(1));
+        }
+        if (sc.period_features !== undefined) {
+          const val = DW.period_features > 0 ? (sc.period_features / DW.period_features) * (safeWeights.period_features / totalWeight) * 100 : 0;
+          dynamicScore += val;
+          newScorecard['period_features'] = Number(val.toFixed(1));
+        }
+        if (sc.sash_windows !== undefined) {
+          const val = DW.sash_windows > 0 ? (sc.sash_windows / DW.sash_windows) * (safeWeights.sash_windows / totalWeight) * 100 : 0;
+          dynamicScore += val;
+          newScorecard['sash_windows'] = Number(val.toFixed(1));
+        }
+        if (sc.garden !== undefined) {
+          const val = DW.garden > 0 ? (sc.garden / DW.garden) * (safeWeights.garden / totalWeight) * 100 : 0;
+          dynamicScore += val;
+          newScorecard['garden'] = Number(val.toFixed(1));
+        }
       }
       
-      // Add all penalties directly, skipping small_reception since we re-evaluate it
-      Object.keys(sc).forEach(k => {
-        if (k.startsWith('penalty_') && k !== 'penalty_small_reception') {
-          dynamicScore += sc[k];
+      // Remove backend penalties to replace them dynamically
+      Object.keys(newScorecard).forEach(k => {
+        if (k.startsWith('penalty_')) {
+          delete newScorecard[k];
         }
       });
-      
-      // Evaluate Reception penalty dynamically
-      const reception_len = p.raw_data?.reception_length_m || 0.0;
-      const reception_wid = p.raw_data?.reception_width_m || 0.0;
-      if (reception_len > 0) {
-          if (reception_wid > 0) {
-              if (reception_len < scoringParams.reception_min_length_m || reception_wid < scoringParams.reception_min_width_m) {
-                 dynamicScore -= 20; // Default penalty
-                 newScorecard['penalty_small_reception'] = -20;
-              } else {
-                 delete newScorecard['penalty_small_reception'];
-              }
-          } else {
-             if (reception_len < scoringParams.reception_min_length_m) {
-                 dynamicScore -= 20;
-                 newScorecard['penalty_small_reception'] = -20;
-             } else {
-                 delete newScorecard['penalty_small_reception'];
-             }
-          }
+
+      const epc = p.raw_data?.epc_rating;
+      if (epc === 'F' || epc === 'G') {
+        if (penalties.poor_epc_rating !== 0) {
+          dynamicScore += penalties.poor_epc_rating;
+          newScorecard['penalty_poor_epc'] = penalties.poor_epc_rating;
+        }
+      }
+
+      const noisy = p.raw_data?.is_noisy_location ?? (p as any).is_noisy_location;
+      if (noisy) {
+        if (penalties.noisy_location !== 0) {
+          dynamicScore += penalties.noisy_location;
+          newScorecard['penalty_noisy_location'] = penalties.noisy_location;
+        }
+      }
+
+      const recGround = p.raw_data?.reception_on_ground_floor ?? p.reception_on_ground_floor;
+      if (recGround === false) {
+        if (penalties.not_ground_floor_reception !== 0) {
+          dynamicScore += penalties.not_ground_floor_reception;
+          newScorecard['penalty_not_ground_floor_reception'] = penalties.not_ground_floor_reception;
+        }
       }
       
       // Ensure score doesn't go below 0 or above 100 for display
@@ -448,7 +681,7 @@ function App() {
         }
       };
     });
-  }, [properties, weights, scoringParams]);
+  }, [properties, weights, scoringParams, penalties]);
 
   const filteredProperties = useMemo(() => {
     return scoredProperties.filter(p => {
@@ -567,8 +800,12 @@ function App() {
         <h1><MapIcon size={28} /> Property Pinger</h1>
         
         <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          <button className="toggle-pinned-btn" onClick={() => setShowPinnedPanel(true)}>
-            <List size={20} /> View Pinned Properties
+          <button className="toggle-pinned-btn" onClick={() => { setShowPinnedPanel(!showPinnedPanel); setShowSettingsPanel(false); setShowItemPanel(false); }}>
+            <List size={20} /> Pinned Properties
+          </button>
+
+          <button className="toggle-pinned-btn" onClick={() => { setShowItemPanel(!showItemPanel); setShowPinnedPanel(false); setShowSettingsPanel(false); }}>
+            <MapIcon size={20} /> Large Item Constraints
           </button>
 
           <div className="filter-group">
@@ -585,99 +822,9 @@ function App() {
             </div>
           </div>
 
-          <div className="filter-group">
-            <div style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer', marginBottom: showWeightsPanel ? '16px' : '0' }} onClick={() => setShowWeightsPanel(!showWeightsPanel)}>
-              <label style={{ cursor: 'pointer', margin: 0 }}>⚙️ Dynamic Scoring Weights</label>
-              <span>{showWeightsPanel ? '▼' : '▶'}</span>
-            </div>
-            
-            {showWeightsPanel && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '12px', backgroundColor: 'var(--surface-light)', borderRadius: '8px' }}>
-                {Object.entries(weights).map(([key, val]) => (
-                  <div key={key}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
-                      <span style={{ textTransform: 'capitalize' }}>{key.replace('_', ' ')}</span>
-                      <span>{val}</span>
-                    </div>
-                    <input 
-                      type="range" min="0" max="40" step="1" value={val} 
-                      onChange={e => setWeights({...weights, [key]: Number(e.target.value)})} 
-                      style={{ width: '100%' }}
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="filter-group">
-            <div style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer', marginBottom: showScoringParamsPanel ? '16px' : '0' }} onClick={() => setShowScoringParamsPanel(!showScoringParamsPanel)}>
-              <label style={{ cursor: 'pointer', margin: 0 }}>📏 Scoring Parameters</label>
-              <span>{showScoringParamsPanel ? '▼' : '▶'}</span>
-            </div>
-            
-            {showScoringParamsPanel && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '12px', backgroundColor: 'var(--surface-light)', borderRadius: '8px' }}>
-                
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
-                    <span>Optimal Total Sqft</span>
-                    <span>{scoringParams.optimal_total_sqft} sqft</span>
-                  </div>
-                  <input type="range" min="500" max="3000" step="50" value={scoringParams.optimal_total_sqft} onChange={e => setScoringParams({...scoringParams, optimal_total_sqft: Number(e.target.value)})} style={{ width: '100%' }} />
-                </div>
-
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
-                    <span>Optimal Bedroom Area</span>
-                    <span>{scoringParams.bedroom_optimal_area_sqm} sqm</span>
-                  </div>
-                  <input type="range" min="8" max="30" step="1" value={scoringParams.bedroom_optimal_area_sqm} onChange={e => setScoringParams({...scoringParams, bedroom_optimal_area_sqm: Number(e.target.value)})} style={{ width: '100%' }} />
-                </div>
-
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
-                    <span>Min Bedroom Width</span>
-                    <span>{scoringParams.bedroom_min_width_m} m</span>
-                  </div>
-                  <input type="range" min="0" max="5" step="0.1" value={scoringParams.bedroom_min_width_m} onChange={e => setScoringParams({...scoringParams, bedroom_min_width_m: Number(e.target.value)})} style={{ width: '100%' }} />
-                </div>
-
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
-                    <span>Min Bedroom Length</span>
-                    <span>{scoringParams.bedroom_min_length_m} m</span>
-                  </div>
-                  <input type="range" min="0" max="6" step="0.1" value={scoringParams.bedroom_min_length_m} onChange={e => setScoringParams({...scoringParams, bedroom_min_length_m: Number(e.target.value)})} style={{ width: '100%' }} />
-                </div>
-
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
-                    <span>Min Reception Width</span>
-                    <span>{scoringParams.reception_min_width_m} m</span>
-                  </div>
-                  <input type="range" min="0" max="6" step="0.1" value={scoringParams.reception_min_width_m} onChange={e => setScoringParams({...scoringParams, reception_min_width_m: Number(e.target.value)})} style={{ width: '100%' }} />
-                </div>
-
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
-                    <span>Min Reception Length</span>
-                    <span>{scoringParams.reception_min_length_m} m</span>
-                  </div>
-                  <input type="range" min="0" max="8" step="0.1" value={scoringParams.reception_min_length_m} onChange={e => setScoringParams({...scoringParams, reception_min_length_m: Number(e.target.value)})} style={{ width: '100%' }} />
-                </div>
-
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
-                    <span>High Ceiling Threshold</span>
-                    <span>{scoringParams.high_ceiling_threshold_m} m</span>
-                  </div>
-                  <input type="range" min="2.2" max="3.5" step="0.1" value={scoringParams.high_ceiling_threshold_m} onChange={e => setScoringParams({...scoringParams, high_ceiling_threshold_m: Number(e.target.value)})} style={{ width: '100%' }} />
-                </div>
-
-              </div>
-            )}
-          </div>
+          <button className="toggle-pinned-btn" onClick={() => { setShowSettingsPanel(!showSettingsPanel); setShowPinnedPanel(false); setShowItemPanel(false); }}>
+            <Settings size={20} /> Scoring Configuration
+          </button>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div className="filter-group">
@@ -749,19 +896,18 @@ function App() {
           </div>
 
           <div className="filter-group">
-            <label>Added in the last</label>
-            <select 
-              value={addedInLast} 
-              onChange={e => setAddedInLast(Number(e.target.value))}
-              className="search-input"
-              style={{ marginTop: '8px', paddingLeft: '12px', cursor: 'pointer' }}
-            >
-              <option value={0}>Anytime</option>
-              <option value={1}>24 hours</option>
-              <option value={3}>3 days</option>
-              <option value={7}>7 days</option>
-              <option value={30}>1 month</option>
-            </select>
+            <GoogleSelect 
+              label="Added in the last"
+              value={addedInLast}
+              onChange={(val) => setAddedInLast(Number(val))}
+              options={[
+                { value: 0, label: 'Anytime' },
+                { value: 1, label: '24 hours' },
+                { value: 3, label: '3 days' },
+                { value: 7, label: '7 days' },
+                { value: 30, label: '1 month' }
+              ]}
+            />
           </div>
 
           <div className="toggle-group" onClick={() => setRequireGarden(!requireGarden)}>
@@ -794,7 +940,7 @@ function App() {
             <label>Property Type</label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
               {uniqueTypes.map(type => (
-                <label key={type} className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem', color: '#cbd5e1' }}>
+                <label key={type} className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                   <input 
                     type="checkbox" 
                     checked={!disabledTypes.includes(type)}
@@ -836,56 +982,200 @@ function App() {
             </div>
           ) : (
             properties.filter(p => p.pinned).map(p => (
-              <div key={p.id} className="pinned-card" onClick={() => { setSelectedProp(p); setCurrentImageIndex(0); }}>
-                <img 
-                  src={getImages(p)[0]} 
-                  alt="Property" 
-                  className="pinned-card-image"
-                />
-                <div className="pinned-card-content">
-                  <div className="pinned-card-header">
-                    <div className="pinned-card-price">£{p.price_pcm} pcm</div>
-                    <div className="pinned-card-badges">
-                      {p.user_status && p.user_status !== 'None' && (
-                        <span className="status-badge">{p.user_status}</span>
-                      )}
-                      <div className="pinned-card-score">{Math.round(p.score || 0)}</div>
-                    </div>
-                  </div>
-                  <div className="pinned-card-details">
-                    <span>{p.bedrooms} Beds</span>
-                    <span>•</span>
-                    <span>{p.property_type || 'Unknown'}</span>
-                    {p.sqft && (
-                      <>
-                        <span>•</span>
-                        <span>{p.sqft} sqft</span>
-                      </>
-                    )}
-                  </div>
-                  <div className="pinned-card-actions">
-                    <button 
-                      className="text-btn danger" 
+              <div 
+                key={p.id} 
+                className="pinned-card" 
+                onClick={() => { setSelectedProp(p); setCurrentImageIndex(0); }}
+                onMouseEnter={() => setHoveredPinnedId(p.id)}
+                onMouseLeave={() => setHoveredPinnedId(null)}
+              >
+                <div style={{ position: 'relative', width: '91.5px', height: '91.5px', flexShrink: 0 }}>
+                  <img 
+                    src={getImages(p)[0]} 
+                    alt="Property" 
+                    className="pinned-card-image"
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  />
+                  {hoveredPinnedId === p.id && (
+                    <button
+                      className="pinned-card-close-btn"
                       onClick={(e) => { e.stopPropagation(); togglePin(p); }}
                     >
-                      Unpin
+                      <X size={14} />
                     </button>
-                    {p.raw_data?.url && (
-                      <a 
-                        href={p.raw_data.url} 
-                        target="_blank" 
-                        rel="noopener noreferrer" 
-                        className="text-btn"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        Rightmove
-                      </a>
-                    )}
+                  )}
+                </div>
+                <div className="pinned-card-content">
+                  <div className="pinned-card-header">
+                    <div className="pinned-card-address" title={p.raw_data?.display_address || p.raw_data?.address || p.description?.substring(0, 50) || 'Unknown Property'}>
+                      {p.raw_data?.display_address || p.raw_data?.address || 'Unknown Property'}
+                    </div>
+                    <div className="pinned-card-score">
+                      <span>{(Math.max(0, Math.min(100, p.score || 0)) / 20).toFixed(1)}</span>
+                      <span style={{ color: '#fbbc04', fontSize: '14px' }}>★</span>
+                      <span>({Math.round(p.score || 0)}/100)</span>
+                    </div>
+                    <div className="pinned-card-type">
+                      <span>{p.property_type || 'Property'}</span>
+                      <span style={{ fontWeight: 500, color: '#202124' }}>£{p.price_pcm} pcm</span>
+                    </div>
                   </div>
                 </div>
               </div>
             ))
           )}
+        </div>
+      </div>
+
+      {/* Settings Panel */}
+      <div className={`pinned-panel ${showSettingsPanel ? 'open' : ''}`}>
+        <div className="pinned-panel-header">
+          <h2>Scoring Configuration</h2>
+          <button className="close-btn" onClick={() => setShowSettingsPanel(false)}>
+            <X size={24} />
+          </button>
+        </div>
+        <div className="pinned-list" style={{ padding: '24px', gap: '24px', display: 'flex', flexDirection: 'column' }}>
+          
+          <div className="filter-group">
+            <label style={{ fontSize: '1.1rem', color: '#202124', marginBottom: '8px' }}>Score Weighting</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {Object.entries(weights).filter(([key]) => key !== 'price' && key !== 'bedroom_size').map(([key, val]) => (
+                <div key={key}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                    <span style={{ textTransform: 'capitalize', color: 'var(--text-secondary)' }}>{key.replace('_', ' ')}</span>
+                    <span style={{ fontWeight: 500 }}>{val}</span>
+                  </div>
+                  <input 
+                    type="range" min="0" max="40" step="1" value={val} 
+                    onChange={e => setWeights({...weights, [key]: Number(e.target.value)})} 
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ height: '1px', background: 'var(--glass-border)', margin: '8px 0' }}></div>
+
+          <div className="filter-group">
+            <label style={{ fontSize: '1.1rem', color: '#202124', marginBottom: '8px' }}>Penalties</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {Object.entries(penalties).filter(([key]) => !['ugly_exterior', 'small_reception', 'virtual_staging'].includes(key)).map(([key, val]) => (
+                <div key={key}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                    <span style={{ textTransform: 'capitalize', color: 'var(--text-secondary)' }}>{key.replace(/_/g, ' ')}</span>
+                    <span style={{ fontWeight: 500 }}>{val}</span>
+                  </div>
+                  <input 
+                    type="range" min="-50" max="0" step="1" value={val as number} 
+                    onChange={e => setPenalties({...penalties, [key]: Number(e.target.value)})} 
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ height: '1px', background: 'var(--glass-border)', margin: '8px 0' }}></div>
+
+          <div className="filter-group">
+            <label style={{ fontSize: '1.1rem', color: '#202124', marginBottom: '8px' }}>Size Preferences</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Optimal Total Sqft</span>
+                  <span style={{ fontWeight: 500 }}>{scoringParams.optimal_total_sqft} sqft</span>
+                </div>
+                <input type="range" min="500" max="3000" step="50" value={scoringParams.optimal_total_sqft} onChange={e => setScoringParams({...scoringParams, optimal_total_sqft: Number(e.target.value)})} style={{ width: '100%' }} />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '4px' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>High Ceiling Threshold</span>
+                  <span style={{ fontWeight: 500 }}>{scoringParams.high_ceiling_threshold_m} m</span>
+                </div>
+                <input type="range" min="2.2" max="3.5" step="0.1" value={scoringParams.high_ceiling_threshold_m} onChange={e => setScoringParams({...scoringParams, high_ceiling_threshold_m: Number(e.target.value)})} style={{ width: '100%' }} />
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Item Constraints Panel */}
+      <div className={`pinned-panel ${showItemPanel ? 'open' : ''}`}>
+        <div className="pinned-panel-header">
+          <h2>Large Item Constraints</h2>
+          <button className="close-btn" onClick={() => setShowItemPanel(false)}>
+            <X size={24} />
+          </button>
+        </div>
+        <div className="pinned-list" style={{ padding: '24px', gap: '24px', display: 'flex', flexDirection: 'column' }}>
+          <div className="filter-group">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <label style={{ fontSize: '1.1rem', color: '#202124', margin: 0 }}>Custom Items</label>
+              <button 
+                onClick={() => setCustomItems([...customItems, { id: Date.now().toString(), name: 'New Item', length: 1.0, width: 1.0 }])}
+                style={{ padding: '4px 8px', fontSize: '0.8rem', background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+              >
+                + Add Item
+              </button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {customItems.map((item: any, idx: number) => (
+                <div key={item.id} style={{ border: '1px solid var(--glass-border)', padding: '12px', borderRadius: '8px', background: 'rgba(255,255,255,0.5)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>Item {idx + 1}</span>
+                    <button 
+                      onClick={() => setCustomItems(customItems.filter((i: any) => i.id !== item.id))}
+                      style={{ background: 'none', border: 'none', color: '#d93025', cursor: 'pointer', padding: '4px' }}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Name</span>
+                      <input 
+                        type="text" 
+                        className="search-input" 
+                        value={item.name}
+                        onChange={e => setCustomItems(customItems.map((i: any) => i.id === item.id ? { ...i, name: e.target.value } : i))}
+                        style={{ padding: '6px', width: '100%', boxSizing: 'border-box', marginTop: '2px' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <div style={{ flex: 1 }}>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Length (m)</span>
+                        <input 
+                          type="number" step="0.1" className="search-input" 
+                          value={item.length}
+                          onChange={e => setCustomItems(customItems.map((i: any) => i.id === item.id ? { ...i, length: Number(e.target.value) } : i))}
+                          style={{ padding: '6px', width: '100%', boxSizing: 'border-box', marginTop: '2px' }}
+                        />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Width (m)</span>
+                        <input 
+                          type="number" step="0.1" className="search-input" 
+                          value={item.width}
+                          onChange={e => setCustomItems(customItems.map((i: any) => i.id === item.id ? { ...i, width: Number(e.target.value) } : i))}
+                          style={{ padding: '6px', width: '100%', boxSizing: 'border-box', marginTop: '2px' }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {customItems.length === 0 && (
+                <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.9rem', padding: '20px 0' }}>
+                  No items configured.
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -916,17 +1206,29 @@ function App() {
               url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
             />
+            <MapEvents onClick={() => {
+              setSelectedProp(null);
+              setShowPinnedPanel(false);
+              setShowSettingsPanel(false);
+              setShowItemPanel(false);
+            }} />
             {filteredProperties.filter(p => showPinnedPanel ? p.pinned : true).map(p => (
               <Marker 
                 key={p.id} 
                 position={[p.latitude!, p.longitude!]}
-                icon={createCustomIcon(p.score || 0, p.ignored, p.pinned || false, isFresh(p.listing_update), viewedProperties.includes(p.id))}
+                icon={createCustomIcon(p.score || 0, p.ignored, p.pinned || false, isFresh(p.listing_update), viewedProperties.includes(p.id), hoveredPinnedId === p.id)}
                 zIndexOffset={Math.round((p.score || 0) * 1000) + (p.pinned ? 100000 : 0) - (viewedProperties.includes(p.id) ? 500 : 0)}
                 riseOnHover={true}
                 eventHandlers={{
-                  click: () => { 
+                  click: (e: any) => {
+                    if (e.originalEvent) {
+                      e.originalEvent.stopPropagation();
+                    }
                     setSelectedProp(p); 
                     setCurrentImageIndex(0); 
+                    setShowPinnedPanel(false);
+                    setShowSettingsPanel(false);
+                    setShowItemPanel(false);
                     if (!viewedProperties.includes(p.id)) {
                       setViewedProperties([...viewedProperties, p.id]);
                     }
@@ -939,6 +1241,16 @@ function App() {
                 key={`poi-${index}`}
                 position={[poi.lat, poi.lng]}
                 icon={createPoiIcon(poi.type)}
+                eventHandlers={{
+                  click: (e: any) => {
+                    if (e.originalEvent) {
+                      e.originalEvent.stopPropagation();
+                    }
+                    setShowPinnedPanel(false);
+                    setShowSettingsPanel(false);
+                    setShowItemPanel(false);
+                  }
+                }}
               >
                 <Tooltip direction="top" offset={[0, -12]} opacity={1}>
                   <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#1e293b' }}>
@@ -951,153 +1263,316 @@ function App() {
         )}
         
         {/* Property Drawer */}
-        <div className={`property-drawer glass ${activeProp ? 'open' : ''}`}>
+        <div className={`property-drawer ${activeProp ? 'open' : ''}`}>
           {activeProp && (
             <>
-              <div className="drawer-header">
-                {isFresh(activeProp.listing_update) && <div className="fresh-badge">NEW</div>}
-                <div className="drawer-hero-container">
-                  <img 
-                    src={images[currentImageIndex]} 
-                    alt={activeProp.raw_data?.display_address || 'Property'} 
-                    className="drawer-hero-image"
-                  />
-                  {images.length > 1 && (
-                    <>
-                      <button 
-                        className="carousel-btn left" 
-                        onClick={() => setCurrentImageIndex((prev) => (prev > 0 ? prev - 1 : images.length - 1))}
-                      >
-                        <ChevronLeft size={20} />
-                      </button>
-                      <button 
-                        className="carousel-btn right" 
-                        onClick={() => setCurrentImageIndex((prev) => (prev < images.length - 1 ? prev + 1 : 0))}
-                      >
-                        <ChevronRight size={20} />
-                      </button>
-                      <div className="carousel-indicators">
-                        {images.map((_: any, i: number) => (
-                          <div key={i} className={`carousel-indicator ${i === currentImageIndex ? 'active' : ''}`} />
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
+              <div className="drawer-hero-container">
+                {isFresh(activeProp.listing_update) && <div className="fresh-badge drawer-fresh-badge">NEW</div>}
+                <img 
+                  src={images[currentImageIndex]} 
+                  alt={activeProp.raw_data?.display_address || 'Property'} 
+                  className="drawer-hero-image"
+                />
+                {images.length > 1 && (
+                  <>
+                    <button 
+                      className="carousel-btn left" 
+                      onClick={() => setCurrentImageIndex((prev) => (prev > 0 ? prev - 1 : images.length - 1))}
+                    >
+                      <ChevronLeft size={20} />
+                    </button>
+                    <button 
+                      className="carousel-btn right" 
+                      onClick={() => setCurrentImageIndex((prev) => (prev < images.length - 1 ? prev + 1 : 0))}
+                    >
+                      <ChevronRight size={20} />
+                    </button>
+                    <div className="carousel-indicators">
+                      {images.map((_: any, i: number) => (
+                        <div key={i} className={`carousel-indicator ${i === currentImageIndex ? 'active' : ''}`} />
+                      ))}
+                    </div>
+                  </>
+                )}
                 <button 
-                  className={`drawer-action-btn ${activeProp.pinned ? 'pinned' : ''}`} 
-                  onClick={() => togglePin(activeProp)}
-                  style={{ right: '56px' }}
-                >
-                  <Pin size={18} fill={activeProp.pinned ? 'currentColor' : 'none'} />
-                </button>
-                <button 
-                  className="drawer-action-btn" 
+                  className="drawer-close-btn-image" 
                   onClick={() => setSelectedProp(null)}
-                  style={{ right: '12px' }}
                 >
                   <X size={20} />
                 </button>
               </div>
-              
-              <div className="score-badge">
-                {Math.round(activeProp.score || 0)} / 100
-              </div>
-              
-              <div className="metric-grid">
-                <div className="metric-card">
-                  <span className="metric-label">Price</span>
-                  <span className="metric-value">£{activeProp.price_pcm} pcm</span>
-                </div>
-                <div className="metric-card">
-                  <span className="metric-label">Bedrooms</span>
-                  <span className="metric-value">{activeProp.bedrooms}</span>
-                </div>
-                <div className="metric-card">
-                  <span className="metric-label">Total Size</span>
-                  <span className="metric-value">{activeProp.sqft ? `${activeProp.sqft} sqft` : ''}</span>
-                </div>
-                <div className="metric-card">
-                  <span className="metric-label">Type</span>
-                  <span className="metric-value">{activeProp.property_type || 'Unknown'}</span>
-                </div>
-                <div className="metric-card">
-                  <span className="metric-label">Commute</span>
-                  <span className="metric-value">{activeProp.commute_mins ? `${Math.ceil(activeProp.commute_mins)}m` : 'N/A'}</span>
-                </div>
-                <div className="metric-card">
-                  <span className="metric-label">£/sqft</span>
-                  <span className="metric-value">{activeProp.price_per_sqft ? `£${activeProp.price_per_sqft}` : 'N/A'}</span>
-                </div>
-                <div className="metric-card" style={{ gridColumn: '1 / -1' }}>
-                  <span className="metric-label">Listed</span>
-                  <span className="metric-value">{formatListedDate(activeProp.listing_update)}</span>
-                </div>
-              </div>
 
-              {activeProp.breakdown?.scorecard && (
-                <div className="workflow-section" style={{ padding: '12px 16px', marginBottom: '24px' }}>
-                  <label style={{ marginBottom: '12px', display: 'block', fontSize: '0.95rem' }}>Score Breakdown</label>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {Object.entries(activeProp.breakdown.scorecard).map(([key, value]) => (
-                      <div key={key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
-                        <span style={{ textTransform: 'capitalize', color: 'var(--text-secondary)' }}>{key.replace(/_/g, ' ')}</span>
-                        <span style={{ fontWeight: 600, color: value > 0 ? 'var(--success)' : (value < 0 ? 'var(--danger)' : 'var(--text-primary)') }}>
-                          {value > 0 ? '+' : ''}{value} pts
-                        </span>
+              <div className="drawer-content-scrollable">
+                <div className="drawer-title-section">
+                  <h1 className="drawer-title">
+                    {activeProp.raw_data?.display_address || activeProp.raw_data?.address || 'Property Details'}
+                  </h1>
+                  <div className="drawer-subtitle">
+                    <span className="drawer-score">{(Math.max(0, Math.min(100, activeProp.score || 0)) / 20).toFixed(1)}</span>
+                    <span className="drawer-stars"><StarRating score100={activeProp.score || 0} /></span>
+                    <span className="drawer-score" style={{ marginLeft: 4 }}>({Math.round(activeProp.score || 0)} / 100)</span>
+                    <span> · £{activeProp.price_pcm} pcm</span>
+                  </div>
+                  <div className="drawer-type">
+                    {activeProp.property_type || 'Property'} · {activeProp.bedrooms} Bedrooms {activeProp.sqft ? `· ${activeProp.sqft} sqft` : ''}
+                  </div>
+                </div>
+
+                <div className="drawer-tabs">
+                  <div className={`drawer-tab ${activeTab === 'Overview' ? 'active' : ''}`} onClick={() => setActiveTab('Overview')}>Overview</div>
+                  <div className={`drawer-tab ${activeTab === 'Scorecard' ? 'active' : ''}`} onClick={() => setActiveTab('Scorecard')}>Scorecard</div>
+                </div>
+
+                {activeTab === 'Overview' && (
+                  <>
+                    <div className="drawer-actions">
+                      <button className="drawer-action-item" onClick={() => togglePin(activeProp)}>
+                        <div className="drawer-action-icon-wrapper" style={{ background: activeProp.pinned ? '#e6f4ea' : '#e8f0fe', color: activeProp.pinned ? '#137333' : '#1a73e8' }}>
+                          <Pin size={20} fill={activeProp.pinned ? 'currentColor' : 'none'} />
+                        </div>
+                        <span>{activeProp.pinned ? 'Saved' : 'Save'}</span>
+                      </button>
+                      <button className="drawer-action-item" onClick={() => window.open(activeProp.raw_data?.url, '_blank')}>
+                        <div className="drawer-action-icon-wrapper">
+                          <ExternalLink size={20} />
+                        </div>
+                        <span>Rightmove</span>
+                      </button>
+                    </div>
+
+                    <div className="drawer-order-btn-wrapper">
+                      <button className="drawer-order-btn" onClick={() => updatePropertyDetails(activeProp.id, { user_status: 'Contacted' })}>
+                        <MessageSquare size={18} /> Contact Agent
+                      </button>
+                    </div>
+
+                    <div className="drawer-list-details">
+                      <div className="drawer-list-item">
+                        <div className="drawer-list-icon"><List size={20} color="#70757a" /></div>
+                        <div className="drawer-list-text" style={{ flex: 1 }}>
+                          <GoogleSelect
+                            label="Status"
+                            value={activeProp.user_status || 'None'}
+                            onChange={(val) => updatePropertyDetails(activeProp.id, { user_status: val as string })}
+                            options={[
+                              { value: "None", label: "None" },
+                              { value: "Interested", label: "Interested" },
+                              { value: "Contacted", label: "Contacted Agent" },
+                              { value: "Viewing", label: "Viewing Booked" },
+                              { value: "Offer", label: "Made Offer" },
+                              { value: "Rejected", label: "Rejected" }
+                            ]}
+                          />
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              
-              <div className="workflow-section">
-                <label>Status</label>
-                <select 
-                  className="status-select"
-                  value={activeProp.user_status || 'None'}
-                  onChange={(e) => updatePropertyDetails(activeProp.id, { user_status: e.target.value })}
-                >
-                  <option value="None">None</option>
-                  <option value="Interested">Interested</option>
-                  <option value="Contacted">Contacted Agent</option>
-                  <option value="Viewing">Viewing Booked</option>
-                  <option value="Offer">Made Offer</option>
-                  <option value="Rejected">Rejected</option>
-                </select>
+                    </div>
 
-                <label>Private Notes</label>
-                <NoteEditor 
-                  propId={activeProp.id} 
-                  initialNote={activeProp.user_note || ''} 
-                  onSave={(id, note) => updatePropertyDetails(id, { user_note: note })} 
-                />
-              </div>
+                    <div className="drawer-list-details">
+                      <div className="drawer-list-item" style={{ alignItems: 'flex-start' }}>
+                        <div className="drawer-list-icon"><CheckCircle2 size={20} color="#188038" /></div>
+                        <div className="drawer-list-text" style={{ lineHeight: 1.5 }}>
+                          {activeProp.breakdown?.pros?.length ? (
+                            activeProp.breakdown.pros.map((p, i) => (
+                              <div key={i}>✓ {p}</div>
+                            ))
+                          ) : (
+                            <div>No pros listed</div>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {(activeProp.breakdown?.cons?.length || 0) > 0 && (
+                        <div className="drawer-list-item" style={{ alignItems: 'flex-start' }}>
+                          <div className="drawer-list-icon"><XCircle size={20} color="#d93025" /></div>
+                          <div className="drawer-list-text" style={{ lineHeight: 1.5 }}>
+                            {activeProp.breakdown!.cons!.map((c, i) => (
+                              <div key={i}>✗ {c}</div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
-              <div className="pros-cons">
-                {activeProp.breakdown?.pros?.map((pro, i) => (
-                  <div key={i} className="pro-item">
-                    <CheckCircle2 size={18} />
-                    <span>{pro}</span>
+                      <div className="drawer-list-item">
+                        <div className="drawer-list-icon"><MapPin size={20} /></div>
+                        <div className="drawer-list-text">
+                          <a 
+                            href={activeProp.latitude && activeProp.longitude 
+                              ? `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${activeProp.latitude},${activeProp.longitude}`
+                              : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(activeProp.raw_data?.display_address || activeProp.raw_data?.address || '')}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: 'inherit', textDecoration: 'underline' }}
+                          >
+                            {activeProp.raw_data?.display_address || 'Address hidden'}
+                          </a>
+                        </div>
+                      </div>
+                      
+                      <div className="drawer-list-item">
+                        <div className="drawer-list-icon"><Clock size={20} /></div>
+                        <div className="drawer-list-text">
+                          {activeProp.commute_mins ? `${Math.ceil(activeProp.commute_mins)} mins commute to office` : 'Commute unknown'}
+                        </div>
+                      </div>
+
+                      <div className="drawer-list-item">
+                        <div className="drawer-list-icon" style={{ fontSize: '18px', display: 'flex', alignItems: 'center' }}>£</div>
+                        <div className="drawer-list-text">
+                          {activeProp.price_per_sqft ? `£${activeProp.price_per_sqft} per sqft` : 'Price per sqft unknown'}
+                        </div>
+                      </div>
+
+                      {activeProp.raw_data?.url && (
+                        <div className="drawer-list-item">
+                          <div className="drawer-list-icon"><Globe size={20} /></div>
+                          <div className="drawer-list-text">
+                            <a href={activeProp.raw_data.url} target="_blank" rel="noopener noreferrer">rightmove.co.uk</a>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="drawer-list-item">
+                        <div className="drawer-list-icon"><Clock size={20} /></div>
+                        <div className="drawer-list-text">
+                          Listed {formatListedDate(activeProp.listing_update)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="drawer-updates-section">
+                      <h3>Private Notes</h3>
+                      <NoteEditor 
+                        propId={activeProp.id} 
+                        initialNote={activeProp.user_note || ''} 
+                        onSave={(id, note) => updatePropertyDetails(id, { user_note: note })} 
+                      />
+                    </div>
+
+                    {activeProp.raw_data?.floorplans && activeProp.raw_data.floorplans.length > 0 && (
+                      <div className="drawer-updates-section">
+                        <h3>Floorplan</h3>
+                        <div 
+                          onClick={() => setIsFloorplanExpanded(true)}
+                          style={{ cursor: 'pointer', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--glass-border)', position: 'relative' }}
+                        >
+                          <img 
+                            src={typeof activeProp.raw_data.floorplans[0] === 'string' ? activeProp.raw_data.floorplans[0] : activeProp.raw_data.floorplans[0].url} 
+                            alt="Floorplan" 
+                            style={{ width: '100%', display: 'block', maxHeight: '200px', objectFit: 'contain', backgroundColor: '#fff' }}
+                          />
+                          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '1'} onMouseLeave={(e) => e.currentTarget.style.opacity = '0'}>
+                            <span style={{ backgroundColor: 'rgba(0,0,0,0.7)', color: 'white', padding: '8px 16px', borderRadius: '20px', fontSize: '14px' }}>Click to expand</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeProp.floorplan_graph && customItems.length > 0 && (
+                      <div className="drawer-updates-section" style={{ marginTop: '16px' }}>
+                        <h3>Fit Verification</h3>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {customItems.map((item: any, idx: number) => {
+                            const result = validateFit(activeProp.floorplan_graph, item.length, item.width);
+                            return (
+                              <div key={item.id || idx} style={{
+                                padding: '12px',
+                                borderRadius: '8px',
+                                backgroundColor: result.fits ? '#e6f4ea' : '#fce8e6',
+                                border: `1px solid ${result.fits ? '#ceead6' : '#fad2cf'}`,
+                                color: result.fits ? '#137333' : '#c5221f',
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: '12px'
+                              }}>
+                                {result.fits ? <CheckCircle2 size={24} style={{ flexShrink: 0 }} /> : <XCircle size={24} style={{ flexShrink: 0 }} />}
+                                <div>
+                                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>
+                                    {item.name}: {result.fits ? 'Item Fits!' : 'Fit Issue Detected'}
+                                  </div>
+                                  <div style={{ fontSize: '0.9rem', lineHeight: 1.4 }}>
+                                    {result.reason}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {activeProp.floorplan_graph?.rooms && (
+                      <div className="drawer-updates-section" style={{ marginTop: '16px' }}>
+                        <h3>Natural Light Profile</h3>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {activeProp.floorplan_graph.rooms
+                            .filter(r => ['reception', 'kitchen', 'bedroom'].includes(r.room_type))
+                            .sort((a, b) => (b.sunlight_hours || 0) - (a.sunlight_hours || 0))
+                            .map((room, idx) => (
+                              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px', backgroundColor: 'var(--bg-secondary)', borderRadius: '6px' }}>
+                                <span style={{ fontWeight: 500 }}>{room.name}</span>
+                                <span style={{ color: 'var(--text-secondary)' }}>
+                                  {room.sunlight_hours && room.sunlight_hours >= 4 ? '☀️ ' : (room.sunlight_hours && room.sunlight_hours > 0 ? '⛅ ' : '')}
+                                  {room.sunlight_hours ? `${room.sunlight_hours} hrs/day` : 'Unknown'}
+                                </span>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {activeTab === 'Scorecard' && activeProp.breakdown?.scorecard && (
+                  <div className="drawer-updates-section">
+                    <h3>Score Breakdown</h3>
+                    <div className="drawer-score-card">
+                      {Object.entries(activeProp.breakdown.scorecard).map(([key, value]) => {
+                        const context = getScoreContext(key, activeProp, weights, scoringParams, priceRange);
+                        return (
+                          <div key={key} style={{ marginBottom: '16px' }}>
+                            <div className="drawer-score-item" style={{ marginBottom: '4px' }}>
+                              <span style={{ textTransform: 'capitalize', fontWeight: 600 }}>{key.replace(/_/g, ' ')}</span>
+                              <span className={`drawer-score-val ${value > 0 ? 'pos' : (value < 0 ? 'neg' : '')}`}>
+                                {value > 0 ? '+' : ''}{value} pts
+                              </span>
+                            </div>
+                            {context && (
+                              <div style={{ fontSize: '13px', color: '#70757a', lineHeight: 1.4 }}>
+                                {context}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                ))}
-                {activeProp.breakdown?.cons?.map((con, i) => (
-                  <div key={i} className="con-item">
-                    <XCircle size={18} />
-                    <span>{con}</span>
-                  </div>
-                ))}
+                )}
               </div>
-              
-              {activeProp.raw_data?.url && (
-                <a href={activeProp.raw_data.url} target="_blank" rel="noopener noreferrer" className="link-button">
-                  View on Rightmove
-                </a>
-              )}
             </>
           )}
         </div>
       </div>
+
+      {/* Floorplan Expanded View */}
+      {isFloorplanExpanded && activeProp?.raw_data?.floorplans && activeProp.raw_data.floorplans.length > 0 && (
+        <div 
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99999, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
+          onClick={() => setIsFloorplanExpanded(false)}
+        >
+          <button 
+            style={{ position: 'absolute', top: '20px', right: '20px', background: 'white', border: 'none', borderRadius: '50%', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.2)' }}
+            onClick={() => setIsFloorplanExpanded(false)}
+          >
+            <X size={24} color="#000" />
+          </button>
+          <img 
+            src={typeof activeProp.raw_data.floorplans[0] === 'string' ? activeProp.raw_data.floorplans[0] : activeProp.raw_data.floorplans[0].url} 
+            alt="Floorplan Expanded" 
+            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', backgroundColor: '#fff', borderRadius: '4px' }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 }

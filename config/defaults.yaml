@@ -36,11 +36,6 @@ scoring_parameters:
   optimal_total_sqft: 1500
   high_ceiling_threshold_m: 2.7
   high_ceiling_max_scale_m: 3.3
-  bedroom_optimal_area_sqm: 16.0
-  bedroom_min_width_m: 0.0
-  bedroom_min_length_m: 0.0
-  reception_min_width_m: 0.0
-  reception_min_length_m: 2.14
 
 
 weights:
@@ -48,7 +43,6 @@ weights:
   price: 15
   commute: 15
   total_size: 10
-  bedroom_size: 0
   natural_light: 20
   period_features: 15
   sash_windows: 5
@@ -57,10 +51,7 @@ weights:
 
 penalties:
   # Negative score deductions for undesirable traits.
-  ugly_exterior: -15
-  small_reception: -20
   not_ground_floor_reception: -15
-  virtual_staging: -15
   wide_angle_distortion: -10
   poor_epc_rating: -30
   noisy_location: -20

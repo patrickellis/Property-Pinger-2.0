@@ -8,8 +8,10 @@ from tenacity import retry, wait_exponential, stop_after_attempt
 
 from core.models import PropertyListing
 
+from typing import Optional
+
 @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
-def extract_rightmove_data_via_api(url: str, api_key: str) -> PropertyListing | None:
+def extract_rightmove_data_via_api(url: str, api_key: str) -> Optional[PropertyListing]:
     encoded_target_url = quote(url)
     proxy_url = f"http://api.scraperapi.com?api_key={api_key}&url={encoded_target_url}&premium=true"
 
@@ -17,7 +19,7 @@ def extract_rightmove_data_via_api(url: str, api_key: str) -> PropertyListing | 
         response = requests.get(proxy_url, timeout=45)
         response.raise_for_status()
     except requests.RequestException as e:
-        logging.error(f"Scraping API failed to fetch {url}: {e}")
+        logging.error(f"Scraping API failed to fetch Rightmove {url}: {e}")
         return None
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -115,4 +117,105 @@ def extract_rightmove_data_via_api(url: str, api_key: str) -> PropertyListing | 
         logging.error(
             f"Schema mismatch after decompression for {url}. Missing key: {e}"
         )
+        return None
+
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
+def extract_zoopla_data_via_api(url: str, api_key: str) -> Optional[PropertyListing]:
+    encoded_target_url = quote(url)
+    proxy_url = f"http://api.scraperapi.com?api_key={api_key}&url={encoded_target_url}&ultra_premium=true"
+
+    try:
+        response = requests.get(proxy_url, timeout=60)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        logging.error(f"Scraping API failed to fetch Zoopla {url}: {e}")
+        return None
+    soup = BeautifulSoup(response.text, "html.parser")
+    
+    # 1. Parse Schema.org RealEstateListing JSON-LD
+    schema_data = None
+    for s in soup.find_all("script", type="application/ld+json"):
+        if s.string:
+            try:
+                data = json.loads(s.string)
+                if data.get("@type") == "RealEstateListing":
+                    schema_data = data
+                    break
+            except Exception:
+                continue
+
+    if not schema_data:
+        logging.warning(f"Schema.org RealEstateListing not found for {url}. Captcha hit or listing removed.")
+        return None
+
+    try:
+        # Extract ID from URL
+        url_match = re.search(r'/details/(\d+)', url)
+        listing_id = url_match.group(1) if url_match else str(hash(url))
+
+        # Offers
+        offers = schema_data.get("offers", {})
+        price = str(offers.get("price", "0"))
+
+        # Beds / Baths from additionalProperty
+        bedrooms = 0
+        bathrooms = 0
+        for prop in schema_data.get("additionalProperty", []):
+            if prop.get("name") == "Bedrooms":
+                bedrooms = int(prop.get("value", 0))
+            elif prop.get("name") == "Bathrooms":
+                bathrooms = int(prop.get("value", 0))
+
+        # Lat/Lng from Next.js chunks via regex
+        lat, lng = None, None
+        coord_match = re.search(r'"coordinates":\{"latitude":([0-9.-]+),"longitude":([0-9.-]+)\}', response.text)
+        if coord_match:
+            lat = float(coord_match.group(1))
+            lng = float(coord_match.group(2))
+
+        # Images via regex from the page (Next.js chunks)
+        images = []
+        img_matches = re.findall(r'"(https://lid\.zoocdn\.com/[^"]+\.jpg)"', response.text)
+        if img_matches:
+            # maintain order but remove duplicates
+            seen = set()
+            for img in img_matches:
+                # filter out very small thumbnails if possible, but for now just take all
+                if img not in seen:
+                    images.append(img)
+                    seen.add(img)
+
+        # Ensure we have at least the schema image
+        schema_img = schema_data.get("image")
+        if schema_img and schema_img not in images:
+            images.insert(0, schema_img)
+
+        cleaned_data = {
+            "id": listing_id,
+            "url": url,
+            "status": {},
+            "price_pcm": price,
+            "bedrooms": bedrooms,
+            "bathrooms": bathrooms,
+            "property_type": "Property", # Zoopla schema doesn't explicitly expose property type easily, fallback to generic
+            "display_address": schema_data.get("name", ""),
+            "postcode": "",
+            "uk_country": "",
+            "latitude": lat,
+            "longitude": lng,
+            "nearest_stations": [],
+            "has_garden": "garden" in schema_data.get("description", "").lower(),
+            "description": schema_data.get("description", ""),
+            "furnishing": "unknown",
+            "listing_update": schema_data.get("datePosted", "Date Unknown"),
+            "images": images,
+            "floorplans": []
+        }
+
+        # Validate with Pydantic
+        return PropertyListing(**cleaned_data)
+
+    except Exception as e:
+        import traceback
+        logging.error(f"Error parsing Zoopla property data for {url}: {e}\n{traceback.format_exc()}")
         return None

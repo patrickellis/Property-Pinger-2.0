@@ -5,10 +5,10 @@ import yaml
 
 import re
 from datetime import datetime, timezone
-from core.db import get_property_cache, save_scraped_data, mark_evaluated, get_config_mtime, get_all_known_property_ids
+from core.db import get_property_cache, save_scraped_data, mark_evaluated, get_config_mtime, get_all_known_property_ids, find_duplicate_property
 from evaluators.scoring import calculate_match_score, passes_dealbreakers
 from evaluators.vision import evaluate_property_images, extract_floorplan_details, PropertyVisuals
-from scrapers.listing import extract_rightmove_data_via_api
+from scrapers.listing import extract_rightmove_data_via_api, extract_zoopla_data_via_api
 from scrapers.search import fetch_search_results
 from services.maps import get_commute_times, check_noise_pollution
 from services.telegram import send_telegram_alert
@@ -45,7 +45,7 @@ def load_config():
 
 
 def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_chat_id, config_mtime, ignore_threshold):
-    match = re.search(r'/properties/(\d+)', url)
+    match = re.search(r'/properties/(\d+)', url) or re.search(r'/(\d{6,})', url)
     if not match:
         return
     property_id = match.group(1)
@@ -74,9 +74,21 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         return
 
     if needs_scrape:
-        property_data = extract_rightmove_data_via_api(url, scraper_key)
+        if "zoopla.co.uk" in url:
+            property_data = extract_zoopla_data_via_api(url, scraper_key)
+        else:
+            property_data = extract_rightmove_data_via_api(url, scraper_key)
+            
         if not property_data:
             return
+            
+        duplicate_id = find_duplicate_property(property_data)
+        if duplicate_id:
+            logging.info(f"[{property_id}] Skipping - duplicate of {duplicate_id}")
+            property_data.user_note = f"Duplicate of {duplicate_id}"
+            mark_evaluated(property_id, ignored=True, property_data=property_data)
+            return
+            
         save_scraped_data(property_id, property_data)
         
     # Copy over user_note from cache if it exists so we don't wipe it out
@@ -110,7 +122,7 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
     property_data.floorplan_count = len(property_data.floorplans)
 
     # 4. Extract Floorplan Details via Gemini (Fast Path)
-    if floorplans_changed or not old_raw:
+    if floorplans_changed or not old_raw or not getattr(old_raw, 'floorplan_graph', None):
         floorplan_details = extract_floorplan_details(
             property_data.floorplans,
             property_data.description
@@ -135,6 +147,10 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         property_data.has_lift = floorplan_details.has_lift or has_lift_from_desc
         
         property_data.master_bedroom_length_m = floorplan_details.master_bedroom_length_m
+        if floorplan_details.floorplan_graph:
+            property_data.floorplan_graph = floorplan_details.floorplan_graph.model_dump()
+        else:
+            property_data.floorplan_graph = None
         
         property_data.has_ac = bool(re.search(r'\b(air conditioning|air-conditioning|a/c|ac|climate control|air-con|aircon)\b', property_data.description, re.IGNORECASE))
         property_data.has_underfloor_heating = bool(re.search(r'\b(underfloor heating|under floor heating|under-floor heating|ufh|underfloor|radiant floor|heated floor)\b', property_data.description, re.IGNORECASE))
@@ -147,6 +163,7 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         property_data.floor_level = old_raw.floor_level
         property_data.has_lift = old_raw.has_lift
         property_data.master_bedroom_length_m = old_raw.master_bedroom_length_m
+        property_data.floorplan_graph = getattr(old_raw, 'floorplan_graph', None)
         property_data.has_ac = getattr(old_raw, 'has_ac', None)
         property_data.has_underfloor_heating = getattr(old_raw, 'has_underfloor_heating', None)
 

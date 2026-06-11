@@ -2,6 +2,27 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 import math
 
+class Window(BaseModel):
+    orientation: str = Field(description="The compass direction the window faces: 'N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'. Infer from the compass rose if present. If no compass rose exists, assume the top of the plan is 'N'.")
+
+class RoomNode(BaseModel):
+    name: str = Field(description="Name or label of the room, e.g. 'Living Room', 'Kitchen', 'Hallway'.")
+    length_m: float = Field(description="Longest dimension of the room in meters. 0.0 if unknown.")
+    width_m: float = Field(description="Shortest dimension of the room in meters. 0.0 if unknown.")
+    room_type: str = Field(description="Type of the room: 'reception', 'bedroom', 'kitchen', 'bathroom', 'hallway', 'entrance', 'other'.")
+    windows: List[Window] = Field(default_factory=list, description="Windows present in the room.")
+    sunlight_hours: float = Field(default=0.0, description="Average daily hours of direct sunlight.")
+
+class DoorEdge(BaseModel):
+    from_room: str = Field(description="Name of the room this door/opening connects from. Must match a room name.")
+    to_room: str = Field(description="Name of the room this door/opening connects to. Must match a room name.")
+    width_m: float = Field(description="Width of the door/opening in meters. Use standard 0.76m if unstated but visible.")
+
+class FloorplanGraph(BaseModel):
+    rooms: List[RoomNode] = Field(default_factory=list, description="All distinct rooms and hallways found in the floorplan.")
+    doors: List[DoorEdge] = Field(default_factory=list, description="All connections (doors/archways) between rooms.")
+    entrance_room: Optional[str] = Field(None, description="The name of the room/hallway that acts as the main entrance to the property from the outside.")
+
 class PropertyListing(BaseModel):
     id: str
     url: str
@@ -56,6 +77,9 @@ class PropertyListing(BaseModel):
     # Cache Invalidators
     image_count: Optional[int] = None
     floorplan_count: Optional[int] = None
+    
+    # Graph based floorplan
+    floorplan_graph: Optional[Dict[str, Any]] = None
 
     @field_validator("price_pcm", mode="before")
     @classmethod

@@ -1,5 +1,6 @@
 search_urls:
   - "https://www.rightmove.co.uk/property-to-rent/map.html?keywords=edwardian%2Cgeorgian%2Ccharacter&sortType=18&areaSizeUnit=sqft&viewType=MAP&channel=RENT&index=0&locationIdentifier=REGION%5E904&numberOfPropertiesPerPage=95&transactionType=LETTING&displayLocationIdentifier=undefined&propertyTypes=detached%2Csemi-detached%2Cterraced%2Cflat%2Cbungalow%2Cland%2Cpark-home%2Cprivate-halls&furnishTypes=furnished%2CpartFurnished%2Cunfurnished&radius=1.0"
+  - "https://www.zoopla.co.uk/to-rent/map/property/manchester/?q=Manchester%2C%20Greater%20Manchester&radius=5&search_source=to-rent"
 
 locations:
   hubs:

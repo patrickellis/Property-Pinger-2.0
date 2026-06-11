@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from google.cloud import firestore
 from google.api_core.exceptions import GoogleAPIError
+from typing import Optional
 from core.models import PropertyListing
 
 # Initialize Firestore Client
@@ -111,3 +112,43 @@ def mark_evaluated(property_id: str, ignored: bool = False, score: float = 0.0, 
             logging.info(f"[{property_id}] Marked as ignored due to low score or dealbreakers.")
     except GoogleAPIError as e:
         logging.error(f"Database evaluation mark error: {e}")
+
+def find_duplicate_property(property_data: PropertyListing) -> Optional[str]:
+    """
+    Checks if a property with the same physical characteristics already exists.
+    Returns the ID of the duplicate if found, otherwise None.
+    """
+    if not db:
+        return None
+    
+    if property_data.latitude is None or property_data.longitude is None:
+        return None
+        
+    try:
+        # Query by price to narrow down. We don't use multiple where() clauses to avoid composite index requirements.
+        query = collection_ref.where('price_pcm', '==', property_data.price_pcm).stream()
+        
+        for doc in query:
+            if doc.id == str(property_data.id):
+                continue
+                
+            data = doc.to_dict()
+            if not data:
+                continue
+                
+            # Check bedrooms match
+            if str(data.get('bedrooms', '')) != str(property_data.bedrooms):
+                continue
+                
+            # Check coordinates (fuzzing up to ~100m, ~0.001 degrees)
+            doc_lat = data.get('latitude')
+            doc_lng = data.get('longitude')
+            
+            if doc_lat is not None and doc_lng is not None:
+                if abs(doc_lat - property_data.latitude) < 0.002 and abs(doc_lng - property_data.longitude) < 0.002:
+                    return doc.id
+                    
+        return None
+    except GoogleAPIError as e:
+        logging.error(f"Database duplicate check error: {e}")
+        return None
