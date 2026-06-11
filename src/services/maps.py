@@ -75,4 +75,5 @@ def check_noise_pollution(lat: float, lng: float) -> bool:
         return len(data.get("elements", [])) > 0
     except Exception as e:
         logging.error(f"Overpass API request failed: {e}")
-        return False
+        raise e
+
