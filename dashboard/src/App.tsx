@@ -45,6 +45,7 @@ interface Property {
   has_underfloor_heating?: boolean;
   reception_on_ground_floor?: boolean;
   description?: string;
+  display_address?: string;
   listing_update?: string;
   pinned?: boolean;
   user_note?: string;
