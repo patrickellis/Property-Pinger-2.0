@@ -30,7 +30,8 @@ def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_prope
         parsed = parsed._replace(path=new_path)
         
         query_params = parse_qsl(parsed.query)
-        query_params = [(k, v) for k, v in query_params if k != 'pn']
+        query_params = [(k, v) for k, v in query_params if k not in ('pn', 'results_sort')]
+        query_params.append(('results_sort', 'newest_listings'))
         if page > 1:
             query_params.append(('pn', str(page)))
         
@@ -48,6 +49,7 @@ def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_prope
 
         soup = BeautifulSoup(response.text, 'html.parser')
         new_urls_found = 0
+        new_unseen_on_page = 0
         page_urls = set()
         
         # Zoopla listing links typically have 'data-testid="listing-details-link"' or similar, or just match '/to-rent/details/'
@@ -76,11 +78,16 @@ def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_prope
                 match = re.search(r'/(\d{6,})', clean_url)
                 if match and match.group(1) not in known_property_ids:
                     unseen_count += 1
+                    new_unseen_on_page += 1
                     
         logging.info(f"Zoopla Page {page}: Extracted {new_urls_found} new properties ({unseen_count}/{max_unseen_properties} unseen quota met).")
         
         if unseen_count >= max_unseen_properties:
             logging.info(f"Reached unseen properties quota ({max_unseen_properties}). Stopping Zoopla pagination.")
+            break
+
+        if len(page_urls) > 0 and new_unseen_on_page == 0:
+            logging.info(f"All properties on Zoopla Page {page} are already known. Stopping pagination early.")
             break
         
         # If no properties found on page, we reached the end
@@ -109,9 +116,10 @@ def _fetch_rightmove_search_results(base_search_url: str, api_key: str, known_pr
         parsed = parsed._replace(path=new_path)
 
         query_params = parse_qsl(parsed.query)
-        query_params = [(k, v) for k, v in query_params if k not in ('index', 'viewType')]
+        query_params = [(k, v) for k, v in query_params if k not in ('index', 'viewType', 'sortType')]
         query_params.append(('index', str(index)))
         query_params.append(('viewType', 'LIST'))
+        query_params.append(('sortType', '6'))
         
         new_query = urlencode(query_params)
         paginated_url = urlunparse(parsed._replace(query=new_query))
@@ -127,6 +135,7 @@ def _fetch_rightmove_search_results(base_search_url: str, api_key: str, known_pr
 
         soup = BeautifulSoup(response.text, 'html.parser')
         new_urls_found = 0
+        new_unseen_on_page = 0
         page_urls = set()
         
         for link in soup.find_all('a', class_='propertyCard-link'):
@@ -144,11 +153,16 @@ def _fetch_rightmove_search_results(base_search_url: str, api_key: str, known_pr
                 match = re.search(r'/properties/(\d+)', clean_url)
                 if match and match.group(1) not in known_property_ids:
                     unseen_count += 1
+                    new_unseen_on_page += 1
                     
         logging.info(f"Rightmove Page {page + 1}: Extracted {new_urls_found} new properties ({unseen_count}/{max_unseen_properties} unseen quota met).")
         
         if unseen_count >= max_unseen_properties:
             logging.info(f"Reached unseen properties quota ({max_unseen_properties}). Stopping Rightmove pagination.")
+            break
+
+        if len(page_urls) > 0 and new_unseen_on_page == 0:
+            logging.info(f"All properties on Rightmove Page {page + 1} are already known. Stopping pagination early.")
             break
         
         # If Rightmove returns fewer than 24 properties on a page, it's the last page
