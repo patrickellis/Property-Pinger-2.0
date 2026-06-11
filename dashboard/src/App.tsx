@@ -79,10 +79,7 @@ const NoteEditor = ({ propId, initialNote, onSave }: { propId: string, initialNo
 
 const getScoreColor = (score: number, viewed: boolean = false) => {
   const clampedScore = Math.max(0, Math.min(100, score));
-  // Use a quadratic curve to make it harder to reach green hues.
-  // This makes 50 ~ hue 30 (orange), 70 ~ hue 58 (yellow), 100 ~ hue 120 (green).
-  const normalized = clampedScore / 100;
-  const hue = Math.pow(normalized, 2) * 120;
+  const hue = (clampedScore / 100) * 120;
   return `hsla(${hue}, 85%, 50%, ${viewed ? 0.4 : 1})`;
 };
 
@@ -525,12 +522,19 @@ function App() {
               pps = Math.round((price / sqft) * 10) / 10;
             }
 
-            let finalLng = lng;
+            // Add a tiny deterministic jitter so properties at the exact same location don't overlap perfectly
+            // Use the numeric characters in the ID to generate a consistent offset
+            const hash = Array.from(doc.id).reduce((acc, char) => acc + char.charCodeAt(0), 0);
+            const jitterLat = ((hash % 100) - 50) * 0.00005; // ~ +/- 5 meters
+            const jitterLng = (((hash * 13) % 100) - 50) * 0.00005;
+            
+            let finalLat = lat + jitterLat;
+            let finalLng = lng + jitterLng;
 
             props.push({ 
               ...data, 
               id: doc.id,
-              latitude: lat,
+              latitude: finalLat,
               longitude: finalLng,
               price_pcm: price,
               bedrooms: beds,
@@ -686,11 +690,11 @@ function App() {
 
   const filteredProperties = useMemo(() => {
     return scoredProperties.filter(p => {
+      if (hideViewed && viewedProperties.includes(p.id)) return false;
+
       if (p.ignored) {
         return showIgnored; // Bypass all other filters if we explicitly want to see ignored properties
       }
-
-      if (hideViewed && viewedProperties.includes(p.id)) return false;
 
       if (typeof p.score === 'number' && p.score < minScore) return false;
       if (p.price_pcm && (p.price_pcm < priceRange[0] || p.price_pcm > priceRange[1])) return false;
