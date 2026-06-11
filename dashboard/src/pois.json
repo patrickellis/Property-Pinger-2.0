@@ -1,0 +1,38 @@
+[
+  {
+    "name": "South Kensington Station, London",
+    "type": "hub",
+    "lat": 51.4944294,
+    "lng": -0.1748454
+  },
+  {
+    "name": "Harley Street, London",
+    "type": "hub",
+    "lat": 51.521972,
+    "lng": -0.1483281
+  },
+  {
+    "name": "Grosvenor Square, London",
+    "type": "hub",
+    "lat": 51.5115241,
+    "lng": -0.1513894
+  },
+  {
+    "name": "Regent's Park, London",
+    "type": "hub",
+    "lat": 51.530107,
+    "lng": -0.1537691
+  },
+  {
+    "name": "Hyde Park, London",
+    "type": "hub",
+    "lat": 51.5074889,
+    "lng": -0.1622074
+  },
+  {
+    "name": "Royal College of Music, London",
+    "type": "venue",
+    "lat": 51.4994776,
+    "lng": -0.1771007
+  }
+]
