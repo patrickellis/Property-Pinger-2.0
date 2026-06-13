@@ -11,12 +11,8 @@ alert_threshold: 70
 ignore_threshold: 30
 
 dealbreakers:
-  # Maximum monthly rent in GBP. Properties above this are instantly rejected.
-  max_price_pcm: 20000
   # Minimum number of bedrooms.
-  min_bedrooms: 1
-  # Maximum number of bedrooms.
-  max_bedrooms: 5
+  min_bedrooms: 0
   # Minimum total size in square feet (0 to disable).
   min_total_sqft: 0
   # Acceptable furnishing states (valid options: "furnished", "part furnished", "unfurnished", "unknown").

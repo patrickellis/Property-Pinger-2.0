@@ -1,12 +1,25 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
 import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { MapContainer, TileLayer, Marker, Tooltip, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Tooltip, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { db } from './firebase';
 import { X, CheckCircle2, XCircle, Map as MapIcon, ChevronLeft, ChevronRight, Pin, Search, List, Globe, Clock, MapPin, ExternalLink, MessageSquare, Settings, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
+import MarkerClusterGroup from 'react-leaflet-cluster';
+import 'leaflet.markercluster/dist/MarkerCluster.css';
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import pois from './pois.json';
+
+const createClusterCustomIcon = function (cluster: any) {
+  const count = cluster.getChildCount();
+  const size = count < 10 ? 34 : count < 100 ? 44 : 54;
+  return L.divIcon({
+    html: `<div style="background-color: #1a73e8; color: white; width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 2.5px solid white; box-shadow: 0 3px 8px rgba(0,0,0,0.3); font-weight: 600; font-size: ${count < 100 ? 14 : 16}px;">${count}</div>`,
+    className: 'custom-marker-cluster',
+    iconSize: L.point(size, size, true),
+  });
+};
 
 interface RoomNode {
   name: string;
@@ -83,7 +96,14 @@ const getScoreColor = (score: number, viewed: boolean = false) => {
   return `hsla(${hue}, 85%, 50%, ${viewed ? 0.4 : 1})`;
 };
 
-const createCustomIcon = (score: number, ignored: boolean, pinned: boolean = false, fresh: boolean = false, viewed: boolean = false, isHovered: boolean = false) => {
+const iconCache: Record<string, L.DivIcon> = {};
+
+const createCustomIcon = (score: number, ignored: boolean, pinned: boolean = false, fresh: boolean = false, viewed: boolean = false, isHovered: boolean = false, isSelected: boolean = false) => {
+  const cacheKey = `${score}-${ignored}-${pinned}-${fresh}-${viewed}-${isHovered}-${isSelected}`;
+  if (iconCache[cacheKey]) {
+    return iconCache[cacheKey];
+  }
+
   const bgColor = pinned ? '#ff4f70' : (ignored ? 'var(--danger)' : getScoreColor(score, viewed));
   const size = pinned && !isHovered ? 24 : (isHovered && pinned ? 34 : 36);
   const fontSize = pinned ? size * 0.6 : 14;
@@ -91,14 +111,17 @@ const createCustomIcon = (score: number, ignored: boolean, pinned: boolean = fal
   const anchorY = pinned ? size / 2 : size * 1.207;
   const heartSvg = `<svg viewBox="0 0 24 24" fill="white" width="65%" height="65%" style="margin-top: 1px;"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>`;
 
-  return L.divIcon({
-    className: `custom-marker ${ignored ? 'ignored' : ''} ${pinned ? 'pinned' : ''} ${fresh ? 'fresh' : ''} ${viewed && !pinned ? 'viewed' : ''} ${isHovered ? 'hovered' : ''}`,
+  const icon = L.divIcon({
+    className: `custom-marker ${ignored ? 'ignored' : ''} ${pinned ? 'pinned' : ''} ${fresh ? 'fresh' : ''} ${viewed && !pinned ? 'viewed' : ''} ${isHovered ? 'hovered' : ''} ${isSelected ? 'selected' : ''}`,
     html: `<div class="custom-marker-inner" style="background-color: ${bgColor}; width: ${size}px; height: ${size}px;">
              <span class="custom-marker-content" style="font-size: ${fontSize}px; ${pinned ? 'width: 100%; height: 100%;' : ''}">${pinned ? heartSvg : Math.round(score)}</span>
            </div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, anchorY],
   });
+  
+  iconCache[cacheKey] = icon;
+  return icon;
 };
 
 // Helper to normalize Rightmove date strings to ISO 8601 (YYYY-MM-DD)
@@ -126,70 +149,6 @@ const normalizeToISO8601 = (dateStr?: string) => {
   return dateStr; // fallback
 };
 
-const validateFit = (graph: FloorplanGraph | undefined, itemLength: number, itemWidth: number) => {
-  if (!graph || !graph.rooms || graph.rooms.length === 0) return { fits: false, reason: "No floorplan graph available." };
-
-  const entrance = graph.entrance_room || graph.rooms[0].name;
-  const startNode = graph.rooms.find(r => r.name === entrance);
-  if (!startNode) return { fits: false, reason: "Entrance not found in floorplan." };
-
-  const minItemDim = Math.min(itemLength, itemWidth);
-  const maxItemDim = Math.max(itemLength, itemWidth);
-  const itemArea = itemLength * itemWidth;
-
-  const reachable = new Set<string>();
-  const queue = [entrance];
-  
-  const adjList = new Map<string, Array<{to: string, width: number}>>();
-  graph.rooms.forEach(r => adjList.set(r.name, []));
-  
-  graph.doors.forEach(d => {
-    if (adjList.has(d.from_room)) {
-      adjList.get(d.from_room)!.push({ to: d.to_room, width: d.width_m });
-    }
-    if (adjList.has(d.to_room)) {
-      adjList.get(d.to_room)!.push({ to: d.from_room, width: d.width_m });
-    }
-  });
-
-  while (queue.length > 0) {
-    const curr = queue.shift()!;
-    if (reachable.has(curr)) continue;
-    reachable.add(curr);
-
-    const neighbors = adjList.get(curr) || [];
-    for (const edge of neighbors) {
-      if (edge.width >= minItemDim && !reachable.has(edge.to)) {
-        queue.push(edge.to);
-      }
-    }
-  }
-
-  const reception = graph.rooms.find(r => r.room_type === 'reception');
-  if (!reception) return { fits: false, reason: "No reception room identified.", reachableRooms: Array.from(reachable) };
-
-  if (!reachable.has(reception.name)) {
-    return { fits: false, reason: `Reception room (${reception.name}) is unreachable. A door or hallway is too narrow for ${minItemDim}m.`, reachableRooms: Array.from(reachable) };
-  }
-
-  const roomMinDim = Math.min(reception.length_m, reception.width_m);
-  const roomMaxDim = Math.max(reception.length_m, reception.width_m);
-  const roomArea = reception.length_m * reception.width_m;
-
-  if (roomMinDim < minItemDim || roomMaxDim < maxItemDim) {
-    return { fits: false, reason: `Reception room (${reception.name}) dimensions (${reception.length_m}x${reception.width_m}m) are too small.`, reachableRooms: Array.from(reachable) };
-  }
-  
-  if (roomArea < itemArea * 3) {
-      return { fits: false, reason: `Reception room (${reception.name}) does not have enough free space/wall space for this item.`, reachableRooms: Array.from(reachable)};
-  }
-
-  return { 
-    fits: true, 
-    reason: `Item fits! Path from entrance to ${reception.name} is clear.`,
-    reachableRooms: Array.from(reachable)
-  };
-};
 
 const isFresh = (isoDateStr?: string) => {
   if (!isoDateStr) return false;
@@ -390,6 +349,37 @@ function MapEvents({ onClick }: { onClick: () => void }) {
   return null;
 }
 
+function StreetViewDropTarget({ onDrop }: { onDrop: (lat: number, lng: number) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    const container = map.getContainer();
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
+    const onDropEvent = (e: DragEvent) => {
+      e.preventDefault();
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const latlng = map.containerPointToLatLng([x, y]);
+      onDrop(latlng.lat, latlng.lng);
+    };
+
+    container.addEventListener('dragover', onDragOver);
+    container.addEventListener('drop', onDropEvent);
+
+    return () => {
+      container.removeEventListener('dragover', onDragOver);
+      container.removeEventListener('drop', onDropEvent);
+    };
+  }, [map, onDrop]);
+
+  return null;
+}
+
 function App() {
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
@@ -432,10 +422,10 @@ function App() {
   const [requireLift, setRequireLift] = useLocalStorageState('pinger_requireLift', false);
   const [requireAC, setRequireAC] = useLocalStorageState('pinger_requireAC', false);
   const [excludeUnderfloorHeating, setExcludeUnderfloorHeating] = useLocalStorageState('pinger_excludeUnderfloorHeating', false);
+  const [requireGroundFloorReception, setRequireGroundFloorReception] = useLocalStorageState('pinger_requireGroundFloorReception', false);
   const [disabledTypes, setDisabledTypes] = useLocalStorageState<string[]>('pinger_disabledTypes', []);
   const [keywordFilter, setKeywordFilter] = useLocalStorageState('pinger_keywordFilter', '');
   const [showPinnedPanel, setShowPinnedPanel] = useLocalStorageState('pinger_showPinnedPanel', false);
-  const [showItemPanel, setShowItemPanel] = useLocalStorageState('pinger_showItemPanel', false);
   const [maxPricePerSqft, setMaxPricePerSqft] = useLocalStorageState('pinger_maxPricePerSqft', 0);
   const [maxCommuteMins, setMaxCommuteMins] = useLocalStorageState('pinger_maxCommuteMins', 0);
   const [addedInLast, setAddedInLast] = useLocalStorageState('pinger_addedInLast', 0);
@@ -445,17 +435,13 @@ function App() {
   const [statusFilter, setStatusFilter] = useLocalStorageState<string[]>('pinger_statusFilter', []);
   const [pinnedSortBy, setPinnedSortBy] = useLocalStorageState('pinger_pinnedSortBy', 'default');
   
-  // Custom Fit Constraints
-  const [customItems, setCustomItems] = useLocalStorageState('pinger_customItems', [
-    { id: '1', name: 'Grand Piano', length: 2.0, width: 1.5 }
-  ]);
-  
   // Selected Property
   const [selectedProp, setSelectedProp] = useState<Property | null>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [hoveredPinnedId, setHoveredPinnedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'Overview' | 'Scorecard'>('Overview');
   const [isFloorplanExpanded, setIsFloorplanExpanded] = useState(false);
+  const [streetViewPos, setStreetViewPos] = useState<{lat: number, lng: number} | null>(null);
 
   useEffect(() => {
     const fetchProps = async () => {
@@ -704,6 +690,10 @@ function App() {
       if (requireLift && !p.has_lift && !p.reception_on_ground_floor) return false;
       if (requireAC && !p.has_ac) return false;
       if (excludeUnderfloorHeating && p.has_underfloor_heating) return false;
+      if (requireGroundFloorReception) {
+        const recGround = p.raw_data?.reception_on_ground_floor ?? p.reception_on_ground_floor;
+        if (recGround === false) return false;
+      }
       if (disabledTypes.includes(p.property_type || 'Unknown')) return false;
       if (maxPricePerSqft > 0 && p.price_per_sqft && p.price_per_sqft > maxPricePerSqft) return false;
       if (maxCommuteMins > 0) {
@@ -737,7 +727,9 @@ function App() {
 
       return true;
     });
-  }, [scoredProperties, minScore, priceRange, minBeds, maxBeds, minSqft, requireGarden, requireLift, requireAC, excludeUnderfloorHeating, disabledTypes, keywordFilter, maxPricePerSqft, maxCommuteMins, addedInLast, showIgnored, hideViewed, viewedProperties, statusFilter]);
+  }, [scoredProperties, minScore, priceRange, minBeds, maxBeds, minSqft, requireGarden, requireLift, requireAC, excludeUnderfloorHeating, requireGroundFloorReception, disabledTypes, keywordFilter, maxPricePerSqft, maxCommuteMins, addedInLast, showIgnored, hideViewed, viewedProperties, statusFilter]);
+
+  const deferredFilteredProperties = useDeferredValue(filteredProperties);
 
   const uniqueTypes = useMemo(() => {
     return Array.from(new Set(properties.map(p => p.property_type || 'Unknown'))).sort();
@@ -769,6 +761,7 @@ function App() {
     setRequireLift(false);
     setRequireAC(false);
     setExcludeUnderfloorHeating(false);
+    setRequireGroundFloorReception(false);
     setDisabledTypes([]);
     setKeywordFilter('');
     setMaxPricePerSqft(0);
@@ -841,6 +834,103 @@ function App() {
     }
   };
 
+  const providerLinks = useMemo(() => {
+    if (!activeProp) return [];
+
+    const linked = properties.filter(p => {
+      if (p.id === activeProp.id) return false;
+      if (p.price_pcm !== activeProp.price_pcm) return false;
+      if (p.bedrooms !== activeProp.bedrooms) return false;
+      
+      const lat1 = activeProp.raw_data?.latitude || activeProp.latitude;
+      const lon1 = activeProp.raw_data?.longitude || activeProp.longitude;
+      const lat2 = p.raw_data?.latitude || p.latitude;
+      const lon2 = p.raw_data?.longitude || p.longitude;
+      
+      if (!lat1 || !lon1 || !lat2 || !lon2) return false;
+      
+      // Simple distance check (~22 meters radius)
+      const dLat = lat1 - lat2;
+      const dLon = lon1 - lon2;
+      const distSq = dLat*dLat + dLon*dLon;
+      
+      return distSq < 0.00000004;
+    });
+
+    const allUrls = [activeProp.raw_data?.url, ...linked.map(p => p.raw_data?.url)].filter(Boolean);
+    const links: { name: string, url: string }[] = [];
+    const seenProviders = new Set();
+    
+    allUrls.forEach(url => {
+      let name = 'Website';
+      if (url.includes('rightmove.co.uk')) name = 'Rightmove';
+      else if (url.includes('zoopla.co.uk')) name = 'Zoopla';
+      
+      if (!seenProviders.has(name)) {
+        seenProviders.add(name);
+        links.push({ name, url });
+      }
+    });
+
+    // If no recognizable urls but we had one, at least provide the original one
+    if (links.length === 0 && activeProp.raw_data?.url) {
+      links.push({ name: 'Website', url: activeProp.raw_data.url });
+    }
+
+    // Always sort consistently, e.g. Rightmove first, then Zoopla
+    links.sort((a, b) => a.name.localeCompare(b.name));
+
+    return links;
+  }, [activeProp, properties]);
+
+  const markersContent = useMemo(() => {
+    const pinsToDraw = deferredFilteredProperties.filter(p => showPinnedPanel ? p.pinned : true);
+    const markers = pinsToDraw.map(p => (
+      <Marker 
+        key={p.id} 
+        position={[p.latitude!, p.longitude!]}
+        icon={createCustomIcon(p.score || 0, p.ignored, p.pinned || false, isFresh(p.listing_update), viewedProperties.includes(p.id), hoveredPinnedId === p.id, activeProp?.id === p.id)}
+        zIndexOffset={Math.round((p.score || 0) * 1000) + (p.pinned ? 100000 : 0) - (viewedProperties.includes(p.id) ? 500 : 0) + (activeProp?.id === p.id ? 200000 : 0)}
+        riseOnHover={true}
+        eventHandlers={{
+          click: (e: any) => {
+            if (e.originalEvent) {
+              e.originalEvent.stopPropagation();
+            }
+            setSelectedProp(p); 
+            setCurrentImageIndex(0); 
+            setShowPinnedPanel(false);
+            setShowSettingsPanel(false);
+            if (!viewedProperties.includes(p.id)) {
+              // Delay the heavy map re-render until the drawer CSS transition is complete
+              setTimeout(() => {
+                setViewedProperties(prev => {
+                  if (prev.includes(p.id)) return prev;
+                  return [...prev, p.id];
+                });
+              }, 350);
+            }
+          },
+        }}
+      />
+    ));
+    
+    if (pinsToDraw.length > 500) {
+      return (
+        <MarkerClusterGroup
+          chunkedLoading
+          maxClusterRadius={50}
+          showCoverageOnHover={false}
+          spiderfyOnMaxZoom={true}
+          iconCreateFunction={createClusterCustomIcon}
+        >
+          {markers}
+        </MarkerClusterGroup>
+      );
+    }
+    return <>{markers}</>;
+  }, [deferredFilteredProperties, showPinnedPanel, viewedProperties, hoveredPinnedId, activeProp?.id]);
+
   return (
     <div className="dashboard-layout">
       {/* Sidebar */}
@@ -848,39 +938,29 @@ function App() {
         <h1><MapIcon size={28} /> Property Pinger</h1>
         
         <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          <button className="toggle-pinned-btn" onClick={() => { setShowPinnedPanel(!showPinnedPanel); setShowSettingsPanel(false); setShowItemPanel(false); }}>
+          <button className="toggle-pinned-btn" onClick={() => { setShowPinnedPanel(!showPinnedPanel); setShowSettingsPanel(false); }}>
             <List size={20} /> Pinned Properties
           </button>
 
-          <button className="toggle-pinned-btn" onClick={() => { setShowItemPanel(!showItemPanel); setShowPinnedPanel(false); setShowSettingsPanel(false); }}>
-            <MapIcon size={20} /> Large Item Constraints
-          </button>
-
-          <div className="filter-group">
-            <div style={{ position: 'relative' }}>
-              <input 
-                type="text" 
-                className="search-input" 
-                placeholder="Search keywords (e.g. balcony, garage)" 
-                value={keywordFilter}
-                onChange={e => setKeywordFilter(e.target.value)}
-                style={{ paddingLeft: '36px' }}
-              />
-              <Search size={18} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
-            </div>
-          </div>
-
-          <button className="toggle-pinned-btn" onClick={() => { setShowSettingsPanel(!showSettingsPanel); setShowPinnedPanel(false); setShowItemPanel(false); }}>
+          <button className="toggle-pinned-btn" onClick={() => { setShowSettingsPanel(!showSettingsPanel); setShowPinnedPanel(false); }}>
             <Settings size={20} /> Scoring Configuration
           </button>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div className="filter-group">
               <label>Minimum Score</label>
-              <input 
-                type="range" min="0" max="100" value={minScore} 
-                onChange={e => setMinScore(Number(e.target.value))} 
-              />
+              <div style={{ padding: '0 8px', marginTop: '8px', marginBottom: '12px' }}>
+                <Slider 
+                  min={0} 
+                  max={100} 
+                  value={minScore} 
+                  onChange={(val) => setMinScore(val as number)} 
+                  styles={{
+                    track: { backgroundColor: 'var(--accent)' },
+                    handle: { borderColor: 'var(--accent)', backgroundColor: '#fff', opacity: 1 }
+                  }}
+                />
+              </div>
               <div className="value-display">{minScore} pts</div>
             </div>
             
@@ -898,8 +978,8 @@ function App() {
                     setPriceRange([PRICE_MARKS[indices[0]], PRICE_MARKS[indices[1]]]);
                   }} 
                   styles={{
-                    track: { backgroundColor: 'var(--accent-color)' },
-                    handle: { borderColor: 'var(--accent-color)', backgroundColor: '#fff', opacity: 1 }
+                    track: { backgroundColor: 'var(--accent)' },
+                    handle: { borderColor: 'var(--accent)', backgroundColor: '#fff', opacity: 1 }
                   }}
                 />
               </div>
@@ -908,48 +988,80 @@ function App() {
             
             <div className="filter-group">
               <label>Bedrooms</label>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Min: {minBeds}</div>
-                  <input 
-                    type="range" min="1" max="5" value={minBeds} 
-                    onChange={e => setMinBeds(Math.min(Number(e.target.value), maxBeds))} 
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Max: {maxBeds === 5 ? '5+' : maxBeds}</div>
-                  <input 
-                    type="range" min="1" max="5" value={maxBeds} 
-                    onChange={e => setMaxBeds(Math.max(Number(e.target.value), minBeds))} 
-                  />
-                </div>
+              <div style={{ padding: '0 10px', marginBottom: '15px' }}>
+                <Slider 
+                  range 
+                  min={1} 
+                  max={5} 
+                  step={1} 
+                  value={[minBeds, maxBeds]} 
+                  onChange={(val) => {
+                    const indices = val as number[];
+                    setMinBeds(indices[0]);
+                    setMaxBeds(indices[1]);
+                  }} 
+                  styles={{
+                    track: { backgroundColor: 'var(--accent)' },
+                    handle: { borderColor: 'var(--accent)', backgroundColor: '#fff', opacity: 1 }
+                  }}
+                />
+              </div>
+              <div className="value-display">
+                {minBeds === maxBeds ? (maxBeds === 5 ? '5+ beds' : `${minBeds} bed${minBeds > 1 ? 's' : ''}`) : `${minBeds} - ${maxBeds === 5 ? '5+' : maxBeds} beds`}
               </div>
             </div>
 
             <div className="filter-group">
               <label>Minimum Floor Area</label>
-              <input 
-                type="range" min="0" max="2000" step="50" value={minSqft} 
-                onChange={e => setMinSqft(Number(e.target.value))} 
-              />
+              <div style={{ padding: '0 8px', marginTop: '8px', marginBottom: '12px' }}>
+                <Slider 
+                  min={0} 
+                  max={2000} 
+                  step={50} 
+                  value={minSqft} 
+                  onChange={(val) => setMinSqft(val as number)} 
+                  styles={{
+                    track: { backgroundColor: 'var(--accent)' },
+                    handle: { borderColor: 'var(--accent)', backgroundColor: '#fff', opacity: 1 }
+                  }}
+                />
+              </div>
               <div className="value-display">{minSqft === 0 ? 'Any' : `${minSqft}+ sqft`}</div>
             </div>
             
             <div className="filter-group">
               <label>Maximum Price/Sqft</label>
-              <input 
-                type="range" min="0" max="15" step="0.5" value={maxPricePerSqft} 
-                onChange={e => setMaxPricePerSqft(Number(e.target.value))} 
-              />
+              <div style={{ padding: '0 8px', marginTop: '8px', marginBottom: '12px' }}>
+                <Slider 
+                  min={0} 
+                  max={15} 
+                  step={0.5} 
+                  value={maxPricePerSqft} 
+                  onChange={(val) => setMaxPricePerSqft(val as number)} 
+                  styles={{
+                    track: { backgroundColor: 'var(--accent)' },
+                    handle: { borderColor: 'var(--accent)', backgroundColor: '#fff', opacity: 1 }
+                  }}
+                />
+              </div>
               <div className="value-display">{maxPricePerSqft === 0 ? 'Any' : `£${maxPricePerSqft}/sqft`}</div>
             </div>
 
             <div className="filter-group">
               <label>Maximum Commute Time</label>
-              <input 
-                type="range" min="0" max="120" step="5" value={maxCommuteMins} 
-                onChange={e => setMaxCommuteMins(Number(e.target.value))} 
-              />
+              <div style={{ padding: '0 8px', marginTop: '8px', marginBottom: '12px' }}>
+                <Slider 
+                  min={0} 
+                  max={120} 
+                  step={5} 
+                  value={maxCommuteMins} 
+                  onChange={(val) => setMaxCommuteMins(val as number)} 
+                  styles={{
+                    track: { backgroundColor: 'var(--accent)' },
+                    handle: { borderColor: 'var(--accent)', backgroundColor: '#fff', opacity: 1 }
+                  }}
+                />
+              </div>
               <div className="value-display">{maxCommuteMins === 0 ? 'Any' : `${maxCommuteMins} mins`}</div>
             </div>
           </div>
@@ -977,6 +1089,11 @@ function App() {
           <div className="toggle-group" onClick={() => setRequireLift(!requireLift)}>
             <div className={`toggle-switch ${requireLift ? 'active' : ''}`}></div>
             <label style={{ margin: 0, cursor: 'pointer' }}>Require Lift</label>
+          </div>
+
+          <div className="toggle-group" onClick={() => setRequireGroundFloorReception(!requireGroundFloorReception)}>
+            <div className={`toggle-switch ${requireGroundFloorReception ? 'active' : ''}`}></div>
+            <label style={{ margin: 0, cursor: 'pointer' }}>Require Ground Floor Reception</label>
           </div>
 
           <div className="toggle-group" onClick={() => setRequireAC(!requireAC)}>
@@ -1024,7 +1141,24 @@ function App() {
 
 
           <div className="filter-group">
-            <label>Property Type</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label>Property Type</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  onClick={() => setDisabledTypes([])}
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem', padding: 0 }}
+                >
+                  All
+                </button>
+                <span style={{ color: 'var(--glass-border)' }}>|</span>
+                <button 
+                  onClick={() => setDisabledTypes(uniqueTypes)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', padding: 0 }}
+                >
+                  None
+                </button>
+              </div>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
               {uniqueTypes.map(type => (
                 <label key={type} className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
@@ -1057,7 +1191,7 @@ function App() {
             Reset Filters
           </button>
           <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-            Showing {filteredProperties.length} of {properties.length} properties
+            Showing {deferredFilteredProperties.length} of {properties.length} properties
           </div>
         </div>
       </div>
@@ -1213,83 +1347,23 @@ function App() {
         </div>
       </div>
 
-      {/* Item Constraints Panel */}
-      <div className={`pinned-panel ${showItemPanel ? 'open' : ''}`}>
-        <div className="pinned-panel-header">
-          <h2>Large Item Constraints</h2>
-          <button className="close-btn" onClick={() => setShowItemPanel(false)}>
-            <X size={24} />
-          </button>
-        </div>
-        <div className="pinned-list" style={{ padding: '24px', gap: '24px', display: 'flex', flexDirection: 'column' }}>
-          <div className="filter-group">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <label style={{ fontSize: '1.1rem', color: '#202124', margin: 0 }}>Custom Items</label>
-              <button 
-                onClick={() => setCustomItems([...customItems, { id: Date.now().toString(), name: 'New Item', length: 1.0, width: 1.0 }])}
-                style={{ padding: '4px 8px', fontSize: '0.8rem', background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-              >
-                + Add Item
-              </button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {customItems.map((item: any, idx: number) => (
-                <div key={item.id} style={{ border: '1px solid var(--glass-border)', padding: '12px', borderRadius: '8px', background: 'rgba(255,255,255,0.5)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>Item {idx + 1}</span>
-                    <button 
-                      onClick={() => setCustomItems(customItems.filter((i: any) => i.id !== item.id))}
-                      style={{ background: 'none', border: 'none', color: '#d93025', cursor: 'pointer', padding: '4px' }}
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div>
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Name</span>
-                      <input 
-                        type="text" 
-                        className="search-input" 
-                        value={item.name}
-                        onChange={e => setCustomItems(customItems.map((i: any) => i.id === item.id ? { ...i, name: e.target.value } : i))}
-                        style={{ padding: '6px', width: '100%', boxSizing: 'border-box', marginTop: '2px' }}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <div style={{ flex: 1 }}>
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Length (m)</span>
-                        <input 
-                          type="number" step="0.1" className="search-input" 
-                          value={item.length}
-                          onChange={e => setCustomItems(customItems.map((i: any) => i.id === item.id ? { ...i, length: Number(e.target.value) } : i))}
-                          style={{ padding: '6px', width: '100%', boxSizing: 'border-box', marginTop: '2px' }}
-                        />
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Width (m)</span>
-                        <input 
-                          type="number" step="0.1" className="search-input" 
-                          value={item.width}
-                          onChange={e => setCustomItems(customItems.map((i: any) => i.id === item.id ? { ...i, width: Number(e.target.value) } : i))}
-                          style={{ padding: '6px', width: '100%', boxSizing: 'border-box', marginTop: '2px' }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {customItems.length === 0 && (
-                <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.9rem', padding: '20px 0' }}>
-                  No items configured.
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+
 
       {/* Map */}
       <div className="map-container">
+        <div style={{ position: 'absolute', top: '24px', left: '24px', zIndex: 1000, width: '350px' }}>
+          <div style={{ position: 'relative', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', borderRadius: '8px', background: 'white' }}>
+            <input 
+              type="text" 
+              className="search-input" 
+              placeholder="Search keywords (e.g. balcony, garage)" 
+              value={keywordFilter}
+              onChange={e => setKeywordFilter(e.target.value)}
+              style={{ paddingLeft: '42px', background: 'white', border: '1px solid #e8eaed', height: '48px', fontSize: '15px' }}
+            />
+            <Search size={20} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
+          </div>
+        </div>
         {loading ? (
           <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center' }}>
             <div style={{ color: 'white' }}>Loading map data...</div>
@@ -1315,36 +1389,13 @@ function App() {
               url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
             />
+            <StreetViewDropTarget onDrop={(lat, lng) => setStreetViewPos({ lat, lng })} />
             <MapEvents onClick={() => {
               setSelectedProp(null);
               setShowPinnedPanel(false);
               setShowSettingsPanel(false);
-              setShowItemPanel(false);
             }} />
-            {filteredProperties.filter(p => showPinnedPanel ? p.pinned : true).map(p => (
-              <Marker 
-                key={p.id} 
-                position={[p.latitude!, p.longitude!]}
-                icon={createCustomIcon(p.score || 0, p.ignored, p.pinned || false, isFresh(p.listing_update), viewedProperties.includes(p.id), hoveredPinnedId === p.id)}
-                zIndexOffset={Math.round((p.score || 0) * 1000) + (p.pinned ? 100000 : 0) - (viewedProperties.includes(p.id) ? 500 : 0)}
-                riseOnHover={true}
-                eventHandlers={{
-                  click: (e: any) => {
-                    if (e.originalEvent) {
-                      e.originalEvent.stopPropagation();
-                    }
-                    setSelectedProp(p); 
-                    setCurrentImageIndex(0); 
-                    setShowPinnedPanel(false);
-                    setShowSettingsPanel(false);
-                    setShowItemPanel(false);
-                    if (!viewedProperties.includes(p.id)) {
-                      setViewedProperties([...viewedProperties, p.id]);
-                    }
-                  },
-                }}
-              />
-            ))}
+            {markersContent}
             {pois.map((poi: any, index: number) => (
               <Marker
                 key={`poi-${index}`}
@@ -1357,7 +1408,6 @@ function App() {
                     }
                     setShowPinnedPanel(false);
                     setShowSettingsPanel(false);
-                    setShowItemPanel(false);
                   }
                 }}
               >
@@ -1371,11 +1421,61 @@ function App() {
           </MapContainer>
         )}
         
+        {/* Pegman Control */}
+        {!error && !loading && (
+          <div 
+            className="pegman-control" 
+            draggable 
+            onDragStart={(e) => {
+              if (e.dataTransfer) {
+                e.dataTransfer.setData('text/plain', 'pegman');
+                e.dataTransfer.effectAllowed = 'copy';
+              }
+            }}
+          >
+            <svg width="24" height="36" viewBox="0 0 32 48" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))' }}>
+              <circle cx="16" cy="10" r="6" fill="#FACC15" stroke="#CA8A04" strokeWidth="2"/>
+              <path d="M10 18 C10 14, 22 14, 22 18 L20 30 L12 30 Z" fill="#FACC15" stroke="#CA8A04" strokeWidth="2" strokeLinejoin="round"/>
+              <path d="M10 18 L4 26" stroke="#FACC15" strokeWidth="4" strokeLinecap="round"/>
+              <path d="M22 18 L28 26" stroke="#FACC15" strokeWidth="4" strokeLinecap="round"/>
+              <path d="M13 30 L10 44 M19 30 L22 44" stroke="#FACC15" strokeWidth="5" strokeLinecap="round"/>
+            </svg>
+          </div>
+        )}
+
+        {/* Street View Overlay */}
+        {streetViewPos && (
+          <div className="street-view-overlay">
+            <button className="street-view-close" onClick={() => setStreetViewPos(null)}>
+              <X size={24} />
+            </button>
+            <iframe 
+              src={`https://maps.google.com/maps?layer=c&cbll=${streetViewPos.lat},${streetViewPos.lng}&output=svembed`}
+              width="100%" 
+              height="100%" 
+              frameBorder="0" 
+              allowFullScreen
+            ></iframe>
+          </div>
+        )}
+
         {/* Property Drawer */}
         <div className={`property-drawer ${activeProp ? 'open' : ''}`}>
           {activeProp && (
             <>
-              <div className="drawer-hero-container">
+              <div 
+                className="drawer-hero-container"
+                onWheel={(e) => {
+                  if (images.length <= 1) return;
+                  // Optional: e.preventDefault() if we want to stop page scroll, but standard practice might be not to.
+                  // Since the drawer is fixed, page scroll won't matter much.
+                  if (e.deltaY > 0) {
+                    setCurrentImageIndex((prev) => (prev < images.length - 1 ? prev + 1 : 0));
+                  } else if (e.deltaY < 0) {
+                    setCurrentImageIndex((prev) => (prev > 0 ? prev - 1 : images.length - 1));
+                  }
+                }}
+              >
                 {isFresh(activeProp.listing_update) && <div className="fresh-badge drawer-fresh-badge">NEW</div>}
                 <img 
                   src={images[currentImageIndex]} 
@@ -1441,12 +1541,14 @@ function App() {
                         </div>
                         <span>{activeProp.pinned ? 'Saved' : 'Save'}</span>
                       </button>
-                      <button className="drawer-action-item" onClick={() => window.open(activeProp.raw_data?.url, '_blank')}>
-                        <div className="drawer-action-icon-wrapper">
-                          <ExternalLink size={20} />
-                        </div>
-                        <span>Rightmove</span>
-                      </button>
+                      {providerLinks.map(link => (
+                        <button key={link.name} className="drawer-action-item" onClick={() => window.open(link.url, '_blank')}>
+                          <div className="drawer-action-icon-wrapper">
+                            <ExternalLink size={20} />
+                          </div>
+                          <span>{link.name}</span>
+                        </button>
+                      ))}
                       <button className="drawer-action-item" onClick={() => updatePropertyDetails(activeProp.id, { ignored: !activeProp.ignored })}>
                         <div className="drawer-action-icon-wrapper" style={{ background: activeProp.ignored ? '#fce8e6' : '#f1f3f4', color: activeProp.ignored ? '#d93025' : '#5f6368' }}>
                           <Trash2 size={20} fill={activeProp.ignored ? 'currentColor' : 'none'} />
@@ -1537,14 +1639,23 @@ function App() {
                         </div>
                       </div>
 
-                      {activeProp.raw_data?.url && (
-                        <div className="drawer-list-item">
+                      <div className="drawer-list-item">
+                        <div className="drawer-list-icon" style={{ fontSize: '16px', display: 'flex', alignItems: 'center', fontWeight: 'bold' }}>EPC</div>
+                        <div className="drawer-list-text">
+                          {activeProp.raw_data?.epc_rating && activeProp.raw_data.epc_rating !== 'Unknown' 
+                            ? `EPC Rating: ${activeProp.raw_data.epc_rating}` 
+                            : 'EPC Rating unknown'}
+                        </div>
+                      </div>
+
+                      {providerLinks.map(link => (
+                        <div key={link.url} className="drawer-list-item">
                           <div className="drawer-list-icon"><Globe size={20} /></div>
                           <div className="drawer-list-text">
-                            <a href={activeProp.raw_data.url} target="_blank" rel="noopener noreferrer">rightmove.co.uk</a>
+                            <a href={link.url} target="_blank" rel="noopener noreferrer">View on {link.name}</a>
                           </div>
                         </div>
-                      )}
+                      ))}
 
                       <div className="drawer-list-item">
                         <div className="drawer-list-icon"><Clock size={20} /></div>
@@ -1553,6 +1664,8 @@ function App() {
                         </div>
                       </div>
                     </div>
+
+
 
                     <div className="drawer-updates-section">
                       <h3>Private Notes</h3>
@@ -1582,38 +1695,6 @@ function App() {
                       </div>
                     )}
 
-                    {activeProp.floorplan_graph && customItems.length > 0 && (
-                      <div className="drawer-updates-section" style={{ marginTop: '16px' }}>
-                        <h3>Fit Verification</h3>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                          {customItems.map((item: any, idx: number) => {
-                            const result = validateFit(activeProp.floorplan_graph, item.length, item.width);
-                            return (
-                              <div key={item.id || idx} style={{
-                                padding: '12px',
-                                borderRadius: '8px',
-                                backgroundColor: result.fits ? '#e6f4ea' : '#fce8e6',
-                                border: `1px solid ${result.fits ? '#ceead6' : '#fad2cf'}`,
-                                color: result.fits ? '#137333' : '#c5221f',
-                                display: 'flex',
-                                alignItems: 'flex-start',
-                                gap: '12px'
-                              }}>
-                                {result.fits ? <CheckCircle2 size={24} style={{ flexShrink: 0 }} /> : <XCircle size={24} style={{ flexShrink: 0 }} />}
-                                <div>
-                                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>
-                                    {item.name}: {result.fits ? 'Item Fits!' : 'Fit Issue Detected'}
-                                  </div>
-                                  <div style={{ fontSize: '0.9rem', lineHeight: 1.4 }}>
-                                    {result.reason}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
 
                     {activeProp.floorplan_graph?.rooms && (
                       <div className="drawer-updates-section" style={{ marginTop: '16px' }}>
@@ -1662,6 +1743,10 @@ function App() {
                     </div>
                   </div>
                 )}
+
+                <div style={{ marginTop: '32px', paddingBottom: '16px', textAlign: 'center', fontSize: '10px', color: '#d1d5db', fontFamily: 'monospace' }}>
+                  db_id: {activeProp.id}
+                </div>
               </div>
             </>
           )}

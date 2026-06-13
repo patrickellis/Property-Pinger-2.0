@@ -23,11 +23,16 @@ class FloorplanGraph(BaseModel):
     doors: List[DoorEdge] = Field(default_factory=list, description="All connections (doors/archways) between rooms.")
     entrance_room: Optional[str] = Field(None, description="The name of the room/hallway that acts as the main entrance to the property from the outside.")
 
+class PriceHistoryEntry(BaseModel):
+    date: str = Field(description="Date the price was changed, e.g., YYYY-MM-DD")
+    price_pcm: int = Field(description="The old price before the change")
+
 class PropertyListing(BaseModel):
     id: str
     url: str
     status: Dict[str, Any] = Field(default_factory=dict)
     price_pcm: int
+    price_history: List[PriceHistoryEntry] = Field(default_factory=list)
     bedrooms: int = 0
     bathrooms: int = 0
     property_type: Optional[str] = None
@@ -70,6 +75,7 @@ class PropertyListing(BaseModel):
     has_virtual_staging: Optional[bool] = None
     has_wide_angle_distortion: Optional[bool] = None
     epc_rating: Optional[str] = None
+
 
     # Google Maps Commute Fields
     commute_metrics_raw: Optional[Dict[str, Any]] = None

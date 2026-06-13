@@ -44,7 +44,14 @@ def load_config():
     return deep_merge(config, specific_config)
 
 
-def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_chat_id, config_mtime, ignore_threshold):
+def evaluate_single_property(search_item, config, scraper_key, telegram_token, telegram_chat_id, config_mtime, ignore_threshold):
+    if isinstance(search_item, dict):
+        url = search_item["url"]
+        search_price_pcm = search_item.get("price_pcm")
+    else:
+        url = search_item
+        search_price_pcm = None
+
     match = re.search(r'/properties/(\d+)', url) or re.search(r'/(\d{6,})', url)
     if not match:
         return
@@ -67,7 +74,20 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
             needs_scrape = False
             property_data = doc_data["raw_data"]
 
-    if evaluated_at and evaluated_at >= config_mtime and not needs_scrape:
+    price_changed = False
+    old_raw = doc_data.get("raw_data")
+    if old_raw and search_price_pcm is not None and getattr(old_raw, 'price_pcm', None) != search_price_pcm:
+        logging.info(f"[{property_id}] Price changed from £{old_raw.price_pcm} to £{search_price_pcm}")
+        today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        
+        if not needs_scrape:
+            from core.models import PriceHistoryEntry
+            property_data.price_history.append(PriceHistoryEntry(date=today_str, price_pcm=old_raw.price_pcm))
+            property_data.price_pcm = search_price_pcm
+            needs_eval = True # force re-evaluation since price changed
+        price_changed = True
+
+    if evaluated_at and evaluated_at >= config_mtime and not needs_scrape and not price_changed:
         needs_eval = False
 
     if not needs_eval:
@@ -81,6 +101,16 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
             
         if not property_data:
             return
+
+        # Restore old price history if it exists
+        if old_raw and hasattr(old_raw, 'price_history'):
+            property_data.price_history = getattr(old_raw, 'price_history', [])
+            
+        # Also, if we just scraped it and its price is different from old_raw, record the change
+        if old_raw and getattr(old_raw, 'price_pcm', None) != property_data.price_pcm:
+            from core.models import PriceHistoryEntry
+            today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            property_data.price_history.append(PriceHistoryEntry(date=today_str, price_pcm=old_raw.price_pcm))
             
         duplicate_id, existing_data = find_duplicate_property(property_data)
         if duplicate_id and existing_data:
@@ -113,8 +143,19 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
                 except Exception as e:
                     logging.error(f"Failed to merge duplicate data: {e}")
 
-            property_data.user_note = f"Duplicate of {duplicate_id}"
-            mark_evaluated(property_id, ignored=True, property_data=property_data)
+            try:
+                from google.cloud import firestore
+                from core.db import collection_ref
+                collection_ref.document(str(property_id)).set({
+                    'id': str(property_id),
+                    'ignored': True,
+                    'user_note': f"Duplicate of {duplicate_id}",
+                    'duplicate_of': str(duplicate_id),
+                    'evaluated_at': firestore.SERVER_TIMESTAMP
+                })
+                logging.info(f"[{property_id}] Saved lightweight stub for duplicate.")
+            except Exception as e:
+                logging.error(f"Failed to save duplicate stub for {property_id}: {e}")
             return
             
         save_scraped_data(property_id, property_data)
@@ -141,6 +182,7 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         images_changed = len(property_data.images) != old_raw.image_count
         floorplans_changed = len(property_data.floorplans) != old_raw.floorplan_count
         location_changed = (property_data.latitude != old_raw.latitude) or (property_data.longitude != old_raw.longitude)
+        
     else:
         images_changed = True
         floorplans_changed = True
@@ -208,7 +250,10 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         property_data.aesthetic_verdict = visual_metrics.aesthetic_verdict
         property_data.has_virtual_staging = visual_metrics.has_virtual_staging
         property_data.has_wide_angle_distortion = visual_metrics.has_wide_angle_distortion
-        property_data.epc_rating = visual_metrics.epc_rating
+        if property_data.epc_rating and property_data.epc_rating != "Unknown":
+            pass # Keep scraped rating
+        else:
+            property_data.epc_rating = visual_metrics.epc_rating
     else:
         logging.info(f"[{property_id}] Skipping Gemini Vision (cache hit)")
         visual_metrics = PropertyVisuals(
@@ -234,18 +279,12 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
         property_data.epc_rating = old_raw.epc_rating
 
     # 6. Heavy Evaluation (Google Maps)
-    # Pre-check: Calculate maximum possible score (assuming 0-minute commute)
-    max_score, _ = calculate_match_score(
-        property_data, visual_metrics, {'average_mins': 0, 'details': {}}, config
-    )
-    alert_thresh = config.get("alert_threshold", 70)
-
-    if max_score < alert_thresh:
-        logging.info(f"[{property_id}] Skipping Maps API (max possible score {max_score:.1f} < {alert_thresh})")
-        commute_metrics = {'average_mins': 999, 'details': {}}
-        property_data.commute_metrics_raw = commute_metrics
-        property_data.commute_mins = None
-    elif location_changed or not old_raw or old_raw.commute_metrics_raw is None:
+    if (
+        location_changed 
+        or not old_raw 
+        or old_raw.commute_metrics_raw is None
+        or (old_raw.commute_metrics_raw.get('average_mins') == 999 and not old_raw.commute_metrics_raw.get('details'))
+    ):
         commute_metrics = get_commute_times(
             origin_lat=property_data.latitude,
             origin_lng=property_data.longitude,
@@ -265,6 +304,7 @@ def evaluate_single_property(url, config, scraper_key, telegram_token, telegram_
     final_score, breakdown = calculate_match_score(
         property_data, visual_metrics, commute_metrics, config
     )
+
 
     # Prepare Rich Logging Data
     cons = " | ".join(breakdown.get("cons", [])) or "None"
@@ -312,32 +352,42 @@ def run_pipeline():
     max_unseen_properties = config.get("max_unseen_properties", 50)
 
     logging.info("Fetching known property IDs from database...")
-    known_property_ids = get_all_known_property_ids()
-    logging.info(f"Loaded {len(known_property_ids)} known properties.")
+    known_property_ids, stale_urls = get_all_known_property_ids()
+    logging.info(f"Loaded {len(known_property_ids)} known properties. Found {len(stale_urls)} stale properties to re-evaluate.")
 
-    all_urls = []
+    all_properties = []
+    seen_urls = set()
     for search_url in config["search_urls"]:
         logging.info(f"Processing search batch: {search_url}")
-        listing_urls = fetch_search_results(
+        listing_items = fetch_search_results(
             search_url, 
             scraper_key, 
             known_property_ids=known_property_ids,
             max_unseen_properties=max_unseen_properties
         )
-        all_urls.extend(listing_urls)
+        for item in listing_items:
+            if item["url"] not in seen_urls:
+                seen_urls.add(item["url"])
+                all_properties.append(item)
         
-    all_urls = list(set(all_urls))
-    logging.info(f"Found {len(all_urls)} unique properties to process across all searches.")
+    # Add any stale properties that failed in previous runs
+    if stale_urls:
+        for url in stale_urls:
+            if url not in seen_urls:
+                seen_urls.add(url)
+                all_properties.append({"url": url, "price_pcm": None})
+        
+    logging.info(f"Found {len(all_properties)} unique properties to process across all searches.")
 
     # Process concurrently using ThreadPoolExecutor
     # max_workers=10 runs APIs in parallel without immediate extreme ratelimiting.
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = []
-        for url in all_urls:
+        for item in all_properties:
             futures.append(
                 executor.submit(
                     evaluate_single_property,
-                    url, config, scraper_key, telegram_token, telegram_chat_id, config_mtime, ignore_threshold
+                    item, config, scraper_key, telegram_token, telegram_chat_id, config_mtime, ignore_threshold
                 )
             )
             

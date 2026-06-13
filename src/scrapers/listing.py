@@ -101,6 +101,7 @@ def extract_rightmove_data_via_api(url: str, api_key: str) -> Optional[PropertyL
             "furnishing": (
                 (prop_info.get("lettings") or {}).get("furnishType") or "unknown"
             ).lower(),
+            "epc_rating": re.search(r'EPC\s*Rating[^A-G]*([A-G])\b', response.text, re.IGNORECASE).group(1).upper() if re.search(r'EPC\s*Rating[^A-G]*([A-G])\b', response.text, re.IGNORECASE) else None,
             "listing_update": (prop_info.get("listingHistory") or {}).get("listingUpdateReason") or prop_info.get("addedOrReduced", "Date Unknown"),
             "images": [img.get("url", "") for img in (prop_info.get("images") or [])],
             "floorplans": [
@@ -205,6 +206,7 @@ def _extract_zoopla_app_router_fallback(soup: BeautifulSoup, html: str, url: str
             "has_garden": "garden" in detailed_desc.lower(),
             "description": detailed_desc,
             "furnishing": "furnished" if "furnished" in detailed_desc.lower() else "unknown",
+            "epc_rating": re.search(r'EPC\s*Rating[^A-G]*([A-G])\b', BeautifulSoup(html, "html.parser").get_text(separator=' '), re.IGNORECASE).group(1).upper() if re.search(r'EPC\s*Rating[^A-G]*([A-G])\b', BeautifulSoup(html, "html.parser").get_text(separator=' '), re.IGNORECASE) else None,
             "listing_update": "Date Unknown",
             "images": images,
             "floorplans": []
@@ -331,6 +333,7 @@ def extract_zoopla_data_via_api(url: str, api_key: str) -> Optional[PropertyList
             "has_garden": has_garden,
             "description": full_description,
             "furnishing": furnishing,
+            "epc_rating": re.search(r'EPC\s*Rating[^A-G]*([A-G])\b', BeautifulSoup(response.text, "html.parser").get_text(separator=' '), re.IGNORECASE).group(1).upper() if re.search(r'EPC\s*Rating[^A-G]*([A-G])\b', BeautifulSoup(response.text, "html.parser").get_text(separator=' '), re.IGNORECASE) else None,
             "listing_update": listing_details.get("statusSummary", {}).get("label") or "Date Unknown",
             "images": images,
             "floorplans": floorplans

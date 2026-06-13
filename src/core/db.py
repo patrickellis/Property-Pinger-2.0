@@ -15,19 +15,32 @@ except Exception as e:
     db = None
     collection_ref = None
 
-def get_all_known_property_ids() -> set[str]:
+def get_all_known_property_ids() -> tuple[set[str], list[str]]:
     """
-    Fetches all known property IDs from Firestore using a keys-only query.
-    Returns a set of string IDs.
+    Fetches all known property IDs from Firestore, and identifies any stale/half-processed properties.
+    Returns (known_property_ids, stale_property_urls).
     """
     if not db:
-        return set()
+        return set(), []
     try:
-        # A keys-only query is much faster and cheaper than fetching documents
-        return {doc.id for doc in collection_ref.select([]).stream()}
+        known = set()
+        stale_urls = []
+        # Querying only specific fields is faster and cheaper
+        for doc in collection_ref.select(['evaluated_at', 'ignored', 'raw_data.url']).stream():
+            data = doc.to_dict() or {}
+            
+            # If a property has no evaluated_at timestamp and isn't ignored, it crashed during evaluation
+            if data.get('evaluated_at') is None and not data.get('ignored'):
+                url = data.get('raw_data', {}).get('url')
+                if url:
+                    stale_urls.append(url)
+            else:
+                known.add(doc.id)
+                
+        return known, stale_urls
     except GoogleAPIError as e:
         logging.error(f"Failed to fetch known property IDs: {e}")
-        return set()
+        return set(), []
 
 
 def get_config_mtime() -> datetime:

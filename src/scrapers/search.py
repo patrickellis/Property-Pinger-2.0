@@ -8,7 +8,7 @@ from tenacity import retry, wait_exponential, stop_after_attempt
 from tenacity import retry, wait_exponential, stop_after_attempt
 
 @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
-def fetch_search_results(base_search_url: str, api_key: str, known_property_ids: set[str] = None, max_unseen_properties: int = 50) -> list[str]:
+def fetch_search_results(base_search_url: str, api_key: str, known_property_ids: set[str] = None, max_unseen_properties: int = 50) -> list[dict]:
     if "zoopla.co.uk" in base_search_url:
         return _fetch_zoopla_search_results(base_search_url, api_key, known_property_ids, max_unseen_properties)
     else:
@@ -20,12 +20,12 @@ def _fetch_with_retry(proxy_url: str) -> requests.Response:
     response.raise_for_status()
     return response
 
-def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_property_ids: set[str] = None, max_unseen_properties: int = 50) -> list[str]:
+def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_property_ids: set[str] = None, max_unseen_properties: int = 50) -> list[dict]:
     """
     Paginates through Zoopla search results until it finds `max_unseen_properties` 
     that are not already in the database.
     """
-    all_property_urls = []
+    all_properties = []
     unseen_count = 0
     known_property_ids = known_property_ids or set()
     
@@ -57,7 +57,7 @@ def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_prope
         soup = BeautifulSoup(response.text, 'html.parser')
         new_urls_found = 0
         new_unseen_on_page = 0
-        page_urls = set()
+        page_properties = {}
         
         # Zoopla listing links typically have 'data-testid="listing-details-link"' or similar, or just match '/to-rent/details/'
         for link in soup.find_all('a', href=True):
@@ -74,11 +74,27 @@ def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_prope
                 # Check it has digits (an ID) in the URL to avoid false positive links
                 if re.search(r'\d{6,}', clean_url):
                     clean_url = clean_url.replace('/contact/', '/')
-                    page_urls.add(clean_url)
+                    
+                    price_pcm = None
+                    # Try to extract price
+                    parent = link.parent
+                    for _ in range(6):
+                        if parent is None:
+                            break
+                        price_text = parent.find(string=re.compile(r'£[0-9,]+'))
+                        if price_text:
+                            p_match = re.search(r'£([0-9,]+)', price_text)
+                            if p_match:
+                                price_pcm = int(p_match.group(1).replace(',', ''))
+                                break
+                        parent = parent.parent
+                        
+                    page_properties[clean_url] = price_pcm
 
-        for clean_url in page_urls:
-            if clean_url not in all_property_urls:
-                all_property_urls.append(clean_url)
+        existing_urls = [p['url'] for p in all_properties]
+        for clean_url, price_pcm in page_properties.items():
+            if clean_url not in existing_urls:
+                all_properties.append({"url": clean_url, "price_pcm": price_pcm})
                 new_urls_found += 1
                 
                 # Zoopla IDs are usually 8-digit numbers at the end
@@ -93,23 +109,23 @@ def _fetch_zoopla_search_results(base_search_url: str, api_key: str, known_prope
             logging.info(f"Reached unseen properties quota ({max_unseen_properties}). Stopping Zoopla pagination.")
             break
 
-        if len(page_urls) > 0 and new_unseen_on_page == 0:
+        if len(page_properties) > 0 and new_unseen_on_page == 0:
             logging.info(f"All properties on Zoopla Page {page} are already known. Stopping pagination early.")
             break
         
         # If no properties found on page, we reached the end
-        if len(page_urls) == 0:
+        if len(page_properties) == 0:
             logging.info("Reached the end of the Zoopla search results.")
             break
             
-    return all_property_urls
+    return all_properties
 
-def _fetch_rightmove_search_results(base_search_url: str, api_key: str, known_property_ids: set[str] = None, max_unseen_properties: int = 50) -> list[str]:
+def _fetch_rightmove_search_results(base_search_url: str, api_key: str, known_property_ids: set[str] = None, max_unseen_properties: int = 50) -> list[dict]:
     """
     Paginates through Rightmove search results until it finds `max_unseen_properties` 
     that are not already in the database (or hits Rightmove's 42 page limit).
     """
-    all_property_urls = []
+    all_properties = []
     unseen_count = 0
     known_property_ids = known_property_ids or set()
     
@@ -142,17 +158,28 @@ def _fetch_rightmove_search_results(base_search_url: str, api_key: str, known_pr
         soup = BeautifulSoup(response.text, 'html.parser')
         new_urls_found = 0
         new_unseen_on_page = 0
-        page_urls = set()
+        page_properties = {}
         
         for link in soup.find_all('a', class_='propertyCard-link'):
             href = link.get('href')
             if href and 'properties' in href:
                 clean_url = urljoin("https://www.rightmove.co.uk", href).split('#')[0].split('?')[0] 
-                page_urls.add(clean_url)
+                
+                price_pcm = None
+                card = link.find_parent('div', class_='propertyCard')
+                if card:
+                    price_elem = card.find('span', class_='propertyCard-priceValue')
+                    if price_elem:
+                        p_match = re.search(r'£([0-9,]+)', price_elem.text)
+                        if p_match:
+                            price_pcm = int(p_match.group(1).replace(',', ''))
+                            
+                page_properties[clean_url] = price_pcm
 
-        for clean_url in page_urls:
-            if clean_url not in all_property_urls:
-                all_property_urls.append(clean_url)
+        existing_urls = [p['url'] for p in all_properties]
+        for clean_url, price_pcm in page_properties.items():
+            if clean_url not in existing_urls:
+                all_properties.append({"url": clean_url, "price_pcm": price_pcm})
                 new_urls_found += 1
                 
                 # Check if this property is unseen
@@ -167,13 +194,13 @@ def _fetch_rightmove_search_results(base_search_url: str, api_key: str, known_pr
             logging.info(f"Reached unseen properties quota ({max_unseen_properties}). Stopping Rightmove pagination.")
             break
 
-        if len(page_urls) > 0 and new_unseen_on_page == 0:
+        if len(page_properties) > 0 and new_unseen_on_page == 0:
             logging.info(f"All properties on Rightmove Page {page + 1} are already known. Stopping pagination early.")
             break
         
         # If Rightmove returns fewer than 24 properties on a page, it's the last page
-        if len(page_urls) < 24:
+        if len(page_properties) < 24:
             logging.info("Reached the end of the Rightmove search results.")
             break
             
-    return all_property_urls
+    return all_properties

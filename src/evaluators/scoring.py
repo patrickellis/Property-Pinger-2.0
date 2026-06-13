@@ -16,15 +16,6 @@ def passes_dealbreakers(property_data: PropertyListing, config: dict) -> tuple[b
         logging.info(f"[{prop_id}] Rejected: {reason}")
         return False, reason
 
-    if property_data.bedrooms > db.get("max_bedrooms", 5):
-        reason = f"Bedrooms ({property_data.bedrooms}) above max required ({db.get('max_bedrooms', 5)})."
-        logging.info(f"[{prop_id}] Rejected: {reason}")
-        return False, reason
-
-    if property_data.price_pcm > db["max_price_pcm"]:
-        reason = f"Price (£{property_data.price_pcm}) exceeds maximum budget (£{db['max_price_pcm']})."
-        logging.info(f"[{prop_id}] Rejected: {reason}")
-        return False, reason
 
     if property_data.furnishing not in db.get("required_furnishing", ["unknown"]):
         reason = f"Furnishing '{property_data.furnishing}' not in required list."
@@ -105,10 +96,11 @@ def calculate_match_score(
     # --- 2. Price Scoring ---
     # Rewards properties that leave headroom in the budget
     price_weight = weights.get("price", 0)
-    if price_weight != 0:
+    max_price = config["dealbreakers"].get("max_price_pcm")
+    if price_weight != 0 and max_price is not None:
         budget_headroom = (
-            config["dealbreakers"]["max_price_pcm"] - property_data.price_pcm
-        ) / max(1, config["dealbreakers"]["max_price_pcm"])
+            max_price - property_data.price_pcm
+        ) / max(1, max_price)
         price_score = min(price_weight, price_weight * (budget_headroom / 0.3))
         price_score = max(0, price_score)
         score += price_score
